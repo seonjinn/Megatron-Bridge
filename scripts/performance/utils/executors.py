@@ -79,7 +79,8 @@ def slurm_executor(
     ]
 
     if log_dir != get_nemorun_home():
-        err_msgs.append(f"\nRun `export NEMORUN_HOME={log_dir}` in your shell environment and rerun this script.")
+        # err_msgs.append(f"\nRun `export NEMORUN_HOME={log_dir}` in your shell environment and rerun this script.")
+        pass
     if len(err_msgs) > 0:
         print("\n".join(err_msgs))
         sys.exit(1)
@@ -138,6 +139,7 @@ def slurm_executor(
         segment=segment,
         network=network,
         launcher=launcher,
+        gres=f"gpu:{num_gpus_per_node}",
     )
 
     return executor
