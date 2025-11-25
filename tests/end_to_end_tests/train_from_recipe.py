@@ -17,11 +17,11 @@ Training script for Megatron-Bridge recipes.
 This script runs inside the container and handles the actual training execution.
 """
 
-import argparse
 import importlib
 import logging
 
 import torch
+from scripts.performance.argument_parser import parse_cli_args
 from scripts.performance.utils.datasets import (
     create_mock_dataset_config,
     create_rp2_dataset_config,
@@ -224,111 +224,11 @@ def apply_args_to_config(config, args):
     return config
 
 
-def setup_argument_parser():
-    """Set up and return the argument parser for the training script."""
-    parser = argparse.ArgumentParser(description="Megatron-Bridge Recipe Training Script")
-
-    # Model specification
-    parser.add_argument("--model-family", required=True, help="Model family (e.g., llama)")
-    parser.add_argument("--recipe-name", required=True, help="Recipe name (e.g., llama3_8b_pretrain_config)")
-    parser.add_argument("--exp-name", required=True, help="Experiment name for logging and checkpoints")
-
-    # Training modes
-    parser.add_argument("--pretrain", action="store_true", help="Run pretraining")
-    parser.add_argument("--finetune", action="store_true", help="Run finetuning")
-    parser.add_argument(
-        "--config-name", type=str, default=None, help="Config name (defaults to pretrain_config and finetune_config"
-    )
-
-    # Training configuration
-    parser.add_argument("--max-steps", type=int, default=100, help="Number of training steps")
-    parser.add_argument("--gbs", type=int, default=8, help="Global batch size")
-    parser.add_argument("--mbs", type=int, default=1, help="Micro batch size")
-    parser.add_argument("--seq-length", type=int, help="Sequence length")
-    parser.add_argument(
-        "--precision-config-name", type=str, default=None, help="Precision config name in mixed_precision.py"
-    )
-
-    # PEFT configuration
-    parser.add_argument("--peft-scheme", type=str, default=None, help="PEFT scheme")
-
-    # Parallelism
-    parser.add_argument("--tensor-parallel-size", type=int, default=None, help="Tensor parallel size")
-    parser.add_argument("--pipeline-parallel-size", type=int, default=None, help="Pipeline parallel size")
-    parser.add_argument("--context-parallel-size", type=int, default=None, help="Context parallel size")
-    parser.add_argument("--virtual-pipeline-size", type=int, default=None, help="Virtual pipeline size")
-    parser.add_argument("--expert-parallel-size", type=int, default=None, help="Expert parallel size")
-    parser.add_argument("--expert-tensor-parallel-size", type=int, default=None, help="Expert tensor parallel size")
-
-    # Optimization
-    parser.add_argument("--lr", type=float, help="Learning rate")
-    parser.add_argument("--min-lr", type=float, help="Minimum learning rate")
-    parser.add_argument("--warmup-iters", type=int, help="Warmup iterations")
-
-    # Checkpointing
-    parser.add_argument("--pretrained-checkpoint", type=str, help="Path to pretrained checkpoint")
-    parser.add_argument("--save-dir", type=str, help="Directory to save checkpoints")
-    parser.add_argument("--load-dir", type=str, help="Directory to load checkpoints")
-    parser.add_argument("--save-interval", type=int, help="Number of iterations between checkpoint saves")
-    parser.add_argument("--async-save", action="store_true", help="Enable async checkpoint saving", default=False)
-    parser.add_argument("--most-recent-k", type=int, help="Number of latest checkpoints to keep")
-    parser.add_argument("--save-config-filepath", type=str, help="Path to save the task configuration file")
-
-    # Data
-    parser.add_argument(
-        "--data",
-        type=str,
-        default="mock",
-        choices=["mock", "rp2", "squad", "squad_packed"],
-        help="Dataset type to use",
-    )
-    parser.add_argument("--dataset-paths", nargs="*", help="Dataset paths (for rp2 dataset)")
-    parser.add_argument("--dataset-root", type=str, help="Dataset root directory (for squad datasets)")
-    parser.add_argument("--index-mapping-dir", type=str, help="Index mapping directory (for rp2 dataset)")
-    parser.add_argument("--dataset-name", type=str, help="Dataset name (deprecated)")
-    parser.add_argument("--packed-sequence", action="store_true", help="Use packed sequences")
-    parser.add_argument("--head-only", action="store_true", help="Use only head data (for rp2 dataset)")
-
-    # Tokenizer configuration
-    parser.add_argument(
-        "--tokenizer-type",
-        type=str,
-        default="SentencePieceTokenizer",
-        choices=["NullTokenizer", "HuggingFaceTokenizer", "SentencePieceTokenizer"],
-        help="Type of tokenizer to use",
-    )
-    parser.add_argument(
-        "--tokenizer-model", type=str, help="Path to tokenizer model (automatically provided by launcher)"
-    )
-    parser.add_argument("--vocab-size", type=int, default=32000, help="Vocabulary size for NullTokenizer")
-
-    # Debugging and profiling
-    parser.add_argument("--convergence", action="store_true", help="Enable convergence run", default=False)
-    parser.add_argument("--nsys", action="store_true", help="Enable nsys profiling", default=False)
-    parser.add_argument("--mem", action="store_true", help="Enable torch memory profiling", default=False)
-    parser.add_argument(
-        "--tensorboard", action="store_true", dest="tensorboard", help="Enable tensorboard logging", default=True
-    )
-    parser.add_argument(
-        "--no-tensorboard", action="store_false", dest="tensorboard", help="Disable tensorboard logging"
-    )
-
-    # WandB configuration
-    parser.add_argument("--wandb-project", type=str, help="WandB project name")
-    parser.add_argument("--wandb-entity", type=str, help="WandB entity name")
-    parser.add_argument("--wandb-exp-name", type=str, help="WandB experiment name")
-    parser.add_argument("--wandb-save-dir", type=str, help="Directory to save WandB logs locally")
-
-    return parser
-
-
 def main():
     """Main entry point for the training script."""
-    # Set up argument parser
-    parser = setup_argument_parser()
 
     # Parse known args and capture unknown ones for config overrides
-    args, unknown_args = parser.parse_known_args()
+    args, unknown_args = parse_cli_args()
 
     # Parse plugin config overrides from unknown arguments
     plugin_config_overrides = parse_plugin_config_overrides(unknown_args)
@@ -347,12 +247,12 @@ def main():
     #    - Example resolved symbol: megatron.bridge.recipes.llama.llama3.pretrain_config
     #
     # 3) Oldest attribute API (family __init__ exposes suffixed names):
-    #    - Path:  megatron.bridge.recipes.<family>.<recipe_name>_<pretrain_config|finetune_config>
+    #    - Path:  megatron.bridge.recipes.<family>.<model_recipe_name>_<pretrain_config|finetune_config>
     #    - Args:  --model-family llama --recipe-name llama3_8b --pretrain
     #    - Example resolved symbol: megatron.bridge.recipes.llama.llama3_8b_pretrain_config
     #
     # The resolver below tries (1) then (2) then (3), raising a clear error if none match.
-    merged_attr = args.recipe_name
+    merged_attr = args.model_recipe_name
     family_pkg_path = f"megatron.bridge.recipes.{args.model_family}"
     logging.info(f"Attempting merged-name import: {family_pkg_path}.{merged_attr}")
 
@@ -364,8 +264,8 @@ def main():
         logging.info(f"Using merged recipe API: {family_pkg_path}.{merged_attr}")
     except Exception:
         # Legacy fallback paths
-        # 1) args.recipe_name is a module under the family exposing pretrain_config/finetune_config
-        legacy_module_path = f"{family_pkg_path}.{args.recipe_name}"
+        # 1) args.model_recipe_name is a module under the family exposing pretrain_config/finetune_config
+        legacy_module_path = f"{family_pkg_path}.{args.model_recipe_name}"
         logging.info(f"Merged import failed; trying legacy module path: {legacy_module_path}")
 
         # Determine function name by mode
@@ -383,12 +283,12 @@ def main():
             config_builder = getattr(recipe_module, config_name)
             logging.info(f"Using legacy module API: {legacy_module_path}.{config_name}")
         except Exception:
-            # 2) Oldest style: attribute on family package named <recipe_name>_<config_name>
+            # 2) Oldest style: attribute on family package named <model_recipe_name>_<config_name>
             # Avoid double suffixing if user already passed a merged name
             if merged_attr.endswith("_pretrain_config") or merged_attr.endswith("_finetune_config"):
                 legacy_attr = merged_attr
             else:
-                legacy_attr = f"{args.recipe_name}_{config_name}"
+                legacy_attr = f"{args.model_recipe_name}_{config_name}"
             logging.info(f"Trying oldest legacy attribute: {family_pkg_path}.{legacy_attr}")
             family_pkg = importlib.import_module(family_pkg_path)
             if not hasattr(family_pkg, legacy_attr):

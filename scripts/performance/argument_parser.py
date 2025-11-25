@@ -70,99 +70,27 @@ def lower_str(arg):
     return arg.lower()
 
 
-def parse_cli_args():
-    """
-    Command line arguments correspong to Slurm cluster and NeMo2.0 for running pre-training and
-    fine-tuning experiments.
-    """
-    parser = argparse.ArgumentParser(
-        description="NeMo2.0 Performance Pretraining and Fine-Tuning",
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-
+def common_args(parser):
+    """Common arguments for all tasks."""
     parser.add_argument(
-        "-a",
-        "--account",
-        type=str,
-        help="Slurm account to use for experiment",
+        "-m",
+        "--model_name",
+        type=lower_str,
+        help="Model family name to use for experiment.",
         required=True,
     )
     parser.add_argument(
-        "-p",
-        "--partition",
-        type=str,
-        help="Slurm partition to use for experiment",
+        "-mr",
+        "--model_recipe_name",
+        type=lower_str,
+        help="Model recipe name to use for experiment.",
         required=True,
-    )
-    parser.add_argument(
-        "-g",
-        "--gpu",
-        type=str,
-        choices=["h100", "b200", "gb200", "gb300"],
-        help="Target gpu type.",
-        required=True,
-    )
-    parser.add_argument(
-        "-l",
-        "--log_dir",
-        type=str,
-        help=f"Directory for logging experiment results. Defaults to {get_nemorun_home()}",
-        required=False,
-        default=get_nemorun_home(),
-    )
-    parser.add_argument(
-        "-t",
-        "--time_limit",
-        type=str,
-        help="Maximum time limit to run experiment for. Defaults to 30 minutes (format- 'HH:MM:SS')",
-        required=False,
-        default="00:30:00",
-    )
-    container_img_msg = [
-        "NeMo container to use for experiment. Defaults to latest dev container- 'nvcr.io/nvidia/nemo:dev'",
-        "Make sure your NGC credentials are accessible in your environment.",
-    ]
-    parser.add_argument(
-        "-i",
-        "--container_image",
-        type=str,
-        help=" ".join(container_img_msg),
-        required=False,
-        default="nvcr.io/nvidia/nemo:dev",
-    )
-    parser.add_argument(
-        "-c",
-        "--compute_dtype",
-        type=str,
-        choices=["bf16", "fp8_cs", "fp8_mx", "fp8_sc", "nvfp4"],
-        help="Compute precision. Options- bf16 or fp8. Defaults to bf16",
-        required=False,
-        default="bf16",
     )
     parser.add_argument(
         "--task",
         choices=["pretrain", "sft", "lora"],
         help="Task to run. Defaults to 'pretrain'",
         default="pretrain",
-    )
-    parser.add_argument(
-        "-hf",
-        "--hf_token",
-        type=str,
-        help="HuggingFace token. Defaults to None. Required for accessing tokenizers and checkpoints.",
-        default=None,
-    )
-    nemo_home_msg = [
-        "Sets env var `NEMO_HOME` (on compute node using sbatch script)- directory where NeMo searches",
-        "for models and checkpoints. This saves a lot of time (especially for bigger models) if checkpoints already",
-        f"exist here. Missing files will be downloaded here from HuggingFace. Defaults to {DEFAULT_NEMO_HOME}",
-    ]
-    parser.add_argument(
-        "-nh",
-        "--nemo_home",
-        type=str,
-        help=" ".join(nemo_home_msg),
-        default=DEFAULT_NEMO_HOME,
     )
     parser.add_argument(
         "-wdk",
@@ -185,108 +113,6 @@ def parse_cli_args():
         "--wandb_exp_name",
         type=str,
         help="wandb job name",
-        required=False,
-        default=None,
-    )
-    parser.add_argument(
-        "-d",
-        "--dryrun",
-        help="If true, prints sbatch script to terminal without launching experiment.",
-        required=False,
-        action="store_true",
-    )
-    parser.add_argument(
-        "-ng",
-        "--num_gpus",
-        type=int,
-        help="Number of gpus.",
-        required=True,
-    )
-    parser.add_argument(
-        "-gn",
-        "--gpus_per_node",
-        type=int,
-        help="Number of gpus per node. Defaults to 8",
-        required=False,
-        default=8,
-    )
-
-    parser.add_argument(
-        "-cm",
-        "--custom_mounts",
-        type=list_of_strings,
-        help="Comma separated string of mounts",
-        required=False,
-        default=[],
-    )
-    parser.add_argument(
-        "-cs",
-        "--custom_srun_args",
-        type=list_of_strings,
-        help="Comma separated string of srun arguments",
-        required=False,
-        default=[],
-    )
-    parser.add_argument(
-        "-vb",
-        "--enable_vboost",
-        help="Enable VBoost which steers more power towards tensor cores. Disabled by default",
-        type=bool_arg,
-        required=False,
-        default=None,
-    )
-    parser.add_argument(
-        "-m",
-        "--model_name",
-        type=lower_str,
-        help="Model to use for experiment.",
-        required=True,
-    )
-    parser.add_argument(
-        "-s",
-        "--model_size",
-        type=lower_str,
-        help="Model size to use for experiment.",
-        required=True,
-    )
-    parser.add_argument(
-        "-en",
-        "--enable_nsys",
-        help="Enable Nsys profiling. Disabled by default",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--domain",
-        type=str,
-        help="Domain to use for the experiment- llm, vlm, diffusion. Default: llm",
-        required=False,
-        default="llm",
-    )
-    parser.add_argument(
-        "--use_tokendrop",
-        help="Use token drop. Disabled by default. Currently only supported for DeepSeek v3",
-        type=bool_arg,
-        required=False,
-        default=None,
-    )
-    parser.add_argument(
-        "--use_megatron_fsdp",
-        help="Use Megatron FSDP. Disabled by default.",
-        type=bool_arg,
-        required=False,
-        default=None,
-    )
-    parser.add_argument(
-        "--cuda_graph_impl",
-        help=f"Cuda graph implementation. Options- {', '.join(VALID_CUDA_GRAPH_IMPLS)}.",
-        type=is_cuda_graph_impl_valid,
-        required=False,
-        default=None,
-    )
-    parser.add_argument(
-        "--cuda_graph_scope",
-        help=f"Cuda graph scope. Options- {VALID_CUDA_GRAPH_SCOPES}. Comma separated list of scopes is allowed.",
-        type=is_cuda_graph_scope_valid,
         required=False,
         default=None,
     )
@@ -356,16 +182,223 @@ def parse_cli_args():
         default=None,
     )
     parser.add_argument(
-        "--moe_a2a_overlap",
+        "-ms",
+        "--max_steps",
+        type=int,
+        help="Maximum number of steps to run the experiment for. Defaults to 50.",
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--detach",
+        help="Detach the experiment from the terminal. Disabled by default",
+        action="store_true",
+        dest="detach",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-detach",
+        help="Do not detach the experiment from the terminal. Enabled by default",
+        action="store_false",
+        dest="detach",
+    )
+    parser.add_argument(
+        "--megatron_ckpt",
+        type=str,
+        help=" ".join(
+            [
+                "Megatron checkpoint directory to use for LoRA. Defaults to None.",
+                "Must be in Megatron checkpoint format and required for LoRA.",
+            ]
+        ),
+        required=False,
+        default=None,
+    )
+    # Optimization
+    parser.add_argument("--lr", type=float, help="Learning rate")
+    parser.add_argument("--min-lr", type=float, help="Minimum learning rate")
+    parser.add_argument("--warmup-iters", type=int, help="Warmup iterations")
+
+    # Checkpointing
+    parser.add_argument("--pretrained-checkpoint", type=str, help="Path to pretrained checkpoint")
+    parser.add_argument("--save-dir", type=str, help="Directory to save checkpoints")
+    parser.add_argument("--load-dir", type=str, help="Directory to load checkpoints")
+    parser.add_argument("--save-interval", type=int, help="Number of iterations between checkpoint saves")
+    parser.add_argument("--async-save", action="store_true", help="Enable async checkpoint saving", default=False)
+    parser.add_argument("--most-recent-k", type=int, help="Number of latest checkpoints to keep")
+    parser.add_argument("--save-config-filepath", type=str, help="Path to save the task configuration file")
+
+    # Data
+    parser.add_argument(
+        "--data",
+        type=str,
+        default="mock",
+        choices=["mock", "rp2", "squad", "squad_packed"],
+        help="Dataset type to use",
+    )
+    parser.add_argument("--dataset-paths", nargs="*", help="Dataset paths (for rp2 dataset)")
+    parser.add_argument("--dataset-root", type=str, help="Dataset root directory (for squad datasets)")
+    parser.add_argument("--index-mapping-dir", type=str, help="Index mapping directory (for rp2 dataset)")
+    parser.add_argument("--dataset-name", type=str, help="Dataset name (deprecated)")
+    parser.add_argument("--packed-sequence", action="store_true", help="Use packed sequences")
+    parser.add_argument("--head-only", action="store_true", help="Use only head data (for rp2 dataset)")
+
+    # Tokenizer configuration
+    parser.add_argument(
+        "--tokenizer-type",
+        type=str,
+        default="SentencePieceTokenizer",
+        choices=["NullTokenizer", "HuggingFaceTokenizer", "SentencePieceTokenizer"],
+        help="Type of tokenizer to use",
+    )
+    parser.add_argument(
+        "--tokenizer-model", type=str, help="Path to tokenizer model (automatically provided by launcher)"
+    )
+    parser.add_argument("--vocab-size", type=int, default=32000, help="Vocabulary size for NullTokenizer")
+
+
+def slurm_cluster_args(parser):
+    """Slurm cluster arguments."""
+    parser.add_argument(
+        "-a",
+        "--account",
+        type=str,
+        help="Slurm account to use for experiment",
+        required=True,
+    )
+    parser.add_argument(
+        "-p",
+        "--partition",
+        type=str,
+        help="Slurm partition to use for experiment",
+        required=True,
+    )
+    parser.add_argument(
+        "-t",
+        "--time_limit",
+        type=str,
+        help="Maximum time limit to run experiment for. Defaults to 30 minutes (format- 'HH:MM:SS')",
+        required=False,
+        default="00:30:00",
+    )
+    parser.add_argument(
+        "-gn",
+        "--gpus_per_node",
+        type=int,
+        help="Number of gpus per node. Defaults to 8",
+        required=False,
+        default=8,
+    )
+    parser.add_argument(
+        "-i",
+        "--container_image",
+        type=str,
+        help=" ".join(
+            [
+                "NeMo container to use for experiment. Defaults to latest dev container- 'nvcr.io/nvidia/nemo:dev'",
+                "Make sure your NGC credentials are accessible in your environment.",
+            ]
+        ),
+        required=False,
+        default="nvcr.io/nvidia/nemo:dev",
+    )
+    parser.add_argument(
+        "-cm",
+        "--custom_mounts",
+        type=list_of_strings,
+        help="Comma separated string of mounts",
+        required=False,
+        default=[],
+    )
+    parser.add_argument(
+        "-cs",
+        "--custom_srun_args",
+        type=list_of_strings,
+        help="Comma separated string of srun arguments",
+        required=False,
+        default=[],
+    )
+
+
+def perf_specific_args(parser):
+    """Performance specific arguments."""
+    parser.add_argument(
+        "-s",
+        "--model_size",
+        type=lower_str,
+        help="Model size to use for experiment.",
+        required=True,
+    )
+    parser.add_argument(
+        "-g",
+        "--gpu",
+        type=str,
+        choices=["h100", "b200", "gb200", "gb300"],
+        help="Target gpu type.",
+        required=True,
+    )
+    parser.add_argument(
+        "-c",
+        "--compute_dtype",
+        type=str,
+        choices=["bf16", "fp8_cs", "fp8_mx", "fp8_sc", "nvfp4"],
+        help="Compute precision. Options- bf16 or fp8. Defaults to bf16",
+        required=False,
+        default="bf16",
+    )
+    parser.add_argument(
+        "-ng",
+        "--num_gpus",
+        type=int,
+        help="Number of gpus.",
+        required=True,
+    )
+    parser.add_argument(
+        "-vb",
+        "--enable_vboost",
+        help="Enable VBoost which steers more power towards tensor cores. Disabled by default",
+        type=bool_arg,
+        required=False,
+        default=None,
+    )
+
+    parser.add_argument(
+        "-en",
+        "--enable_nsys",
+        help="Enable Nsys profiling. Disabled by default",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--use_tokendrop",
+        help="Use token drop. Disabled by default. Currently only supported for DeepSeek v3",
         type=bool_arg,
         required=False,
         default=None,
     )
     parser.add_argument(
-        "-ms",
-        "--max_steps",
-        type=int,
-        help="Maximum number of steps to run the experiment for. Defaults to 50.",
+        "--use_megatron_fsdp",
+        help="Use Megatron FSDP. Disabled by default.",
+        type=bool_arg,
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--cuda_graph_impl",
+        help=f"Cuda graph implementation. Options- {', '.join(VALID_CUDA_GRAPH_IMPLS)}.",
+        type=is_cuda_graph_impl_valid,
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--cuda_graph_scope",
+        help=f"Cuda graph scope. Options- {VALID_CUDA_GRAPH_SCOPES}. Comma separated list of scopes is allowed.",
+        type=is_cuda_graph_scope_valid,
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--moe_a2a_overlap",
+        type=bool_arg,
         required=False,
         default=None,
     )
@@ -393,30 +426,62 @@ def parse_cli_args():
         required=False,
         default=None,
     )
+
+
+def parse_cli_args():
+    """
+    Command line arguments for running pre-training and fine-tuning experiments.
+    """
+    parser = argparse.ArgumentParser(
+        description="Megatron-Bridge Pretraining and Fine-Tuning",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    # Slurm cluster arguments
+    slurm_cluster_args(parser)
+
+    # Common arguments
+    common_args(parser)
+
+    # Perf specific arguments
+    perf_specific_args(parser)
+
     parser.add_argument(
-        "--megatron_ckpt",
+        "-l",
+        "--log_dir",
         type=str,
-        help=" ".join(
-            [
-                "Megatron checkpoint directory to use for LoRA. Defaults to None.",
-                "Must be in Megatron checkpoint format and required for LoRA.",
-            ]
-        ),
+        help=f"Directory for logging experiment results. Defaults to {get_nemorun_home()}",
         required=False,
+        default=get_nemorun_home(),
+    )
+
+    parser.add_argument(
+        "-hf",
+        "--hf_token",
+        type=str,
+        help="HuggingFace token. Defaults to None. Required for accessing tokenizers and checkpoints.",
         default=None,
     )
     parser.add_argument(
-        "--detach",
-        help="Detach the experiment from the terminal. Disabled by default",
-        action="store_true",
-        dest="detach",
-        default=True,
+        "-nh",
+        "--nemo_home",
+        type=str,
+        help=" ".join(
+            [
+                "Sets env var `NEMO_HOME` (on compute node using sbatch script)- directory where NeMo searches",
+                "for models and checkpoints. This saves a lot of time (especially for bigger models) if checkpoints already",
+                f"exist here. Missing files will be downloaded here from HuggingFace. Defaults to {DEFAULT_NEMO_HOME}",
+            ]
+        ),
+        default=DEFAULT_NEMO_HOME,
     )
+
     parser.add_argument(
-        "--no-detach",
-        help="Do not detach the experiment from the terminal. Enabled by default",
-        action="store_false",
-        dest="detach",
+        "-d",
+        "--dryrun",
+        help="If true, prints sbatch script to terminal without launching experiment.",
+        required=False,
+        action="store_true",
     )
 
     args, cli_dotlist_overrides = parser.parse_known_args()
