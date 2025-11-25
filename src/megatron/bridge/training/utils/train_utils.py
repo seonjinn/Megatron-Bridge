@@ -592,8 +592,8 @@ def training_log(
 
         if logger_config.log_throughput:
             log_string += f" throughput per GPU (TFLOP/s/GPU): {per_gpu_tf:.1f} |"
-              # Add this block to print Tokens/sec/GPU
-              # Tokens/sec/GPU calculation! 
+            # Add this block to print Tokens/sec/GPU
+            # Tokens/sec/GPU calculation! 
             tokens_per_sec_per_gpu = (batch_size * config.dataset.sequence_length) / elapsed_time_per_iteration / get_world_size_safe()
             log_string += f" Tokens/sec/GPU: {tokens_per_sec_per_gpu:.1f} |"
 
