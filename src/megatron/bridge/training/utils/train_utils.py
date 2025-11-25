@@ -440,7 +440,7 @@ def training_log(
 
                 with open(config.profiling.memory_snapshot_path, "wb") as f:
                     dump(snapshot, f)
-        if logger_config.log_throughput_to_tensorboard:
+        if logger_config.log_throughput_to_tensorboard or (wandb_writer and logger_config.log_throughput):
             throughput_report = report_throughput(
                 iteration=iteration,
                 train_config=train_config,
@@ -448,8 +448,9 @@ def training_log(
                 history_wct=history_wct,
                 window_size=logger_config.throughput_window_size,
             )
-            for metric, value in throughput_report.items():
-                writer.add_scalar(metric, value, iteration)
+            if logger_config.log_throughput_to_tensorboard and writer:
+                for metric, value in throughput_report.items():
+                    writer.add_scalar(metric, value, iteration)
             if wandb_writer:
                 wandb_writer.log(throughput_report, iteration)
         if logger_config.log_memory_to_tensorboard:
