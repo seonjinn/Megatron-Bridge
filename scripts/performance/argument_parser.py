@@ -70,11 +70,11 @@ def lower_str(arg):
     return arg.lower()
 
 
-def common_args(parser):
+def common_args(parser: argparse.ArgumentParser):
     """Common arguments for all tasks."""
     parser.add_argument(
         "-m",
-        "--model_name",
+        "--model_family_name",
         type=lower_str,
         help="Model family name to use for experiment.",
         required=True,
@@ -102,7 +102,7 @@ def common_args(parser):
     )
     parser.add_argument(
         "-wdp",
-        "--wandb_prj_name",
+        "--wandb_project",
         type=str,
         help="wandb project name",
         required=False,
@@ -110,7 +110,7 @@ def common_args(parser):
     )
     parser.add_argument(
         "-wdj",
-        "--wandb_exp_name",
+        "--wandb_experiment_name",
         type=str,
         help="wandb job name",
         required=False,
@@ -182,6 +182,13 @@ def common_args(parser):
         default=None,
     )
     parser.add_argument(
+        "-sl",
+        "--seq_length",
+        type=int,
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
         "-ms",
         "--max_steps",
         type=int,
@@ -189,44 +196,20 @@ def common_args(parser):
         required=False,
         default=None,
     )
-    parser.add_argument(
-        "--detach",
-        help="Detach the experiment from the terminal. Disabled by default",
-        action="store_true",
-        dest="detach",
-        default=True,
-    )
-    parser.add_argument(
-        "--no-detach",
-        help="Do not detach the experiment from the terminal. Enabled by default",
-        action="store_false",
-        dest="detach",
-    )
-    parser.add_argument(
-        "--megatron_ckpt",
-        type=str,
-        help=" ".join(
-            [
-                "Megatron checkpoint directory to use for LoRA. Defaults to None.",
-                "Must be in Megatron checkpoint format and required for LoRA.",
-            ]
-        ),
-        required=False,
-        default=None,
-    )
+
     # Optimization
     parser.add_argument("--lr", type=float, help="Learning rate")
-    parser.add_argument("--min-lr", type=float, help="Minimum learning rate")
-    parser.add_argument("--warmup-iters", type=int, help="Warmup iterations")
+    parser.add_argument("--min_lr", type=float, help="Minimum learning rate")
+    parser.add_argument("--warmup_iters", type=int, help="Warmup iterations")
 
     # Checkpointing
-    parser.add_argument("--pretrained-checkpoint", type=str, help="Path to pretrained checkpoint")
-    parser.add_argument("--save-dir", type=str, help="Directory to save checkpoints")
-    parser.add_argument("--load-dir", type=str, help="Directory to load checkpoints")
-    parser.add_argument("--save-interval", type=int, help="Number of iterations between checkpoint saves")
-    parser.add_argument("--async-save", action="store_true", help="Enable async checkpoint saving", default=False)
-    parser.add_argument("--most-recent-k", type=int, help="Number of latest checkpoints to keep")
-    parser.add_argument("--save-config-filepath", type=str, help="Path to save the task configuration file")
+    parser.add_argument("--pretrained_checkpoint", type=str, help="Path to pretrained checkpoint")
+    parser.add_argument("--save_dir", type=str, help="Directory to save checkpoints")
+    parser.add_argument("--load_dir", type=str, help="Directory to load checkpoints")
+    parser.add_argument("--save_interval", type=int, help="Number of iterations between checkpoint saves")
+    parser.add_argument("--async_save", action="store_true", help="Enable async checkpoint saving", default=False)
+    parser.add_argument("--most_recent_k", type=int, help="Number of latest checkpoints to keep")
+    parser.add_argument("--save_config_filepath", type=str, help="Path to save the task configuration file")
 
     # Data
     parser.add_argument(
@@ -236,12 +219,12 @@ def common_args(parser):
         choices=["mock", "rp2", "squad", "squad_packed"],
         help="Dataset type to use",
     )
-    parser.add_argument("--dataset-paths", nargs="*", help="Dataset paths (for rp2 dataset)")
-    parser.add_argument("--dataset-root", type=str, help="Dataset root directory (for squad datasets)")
-    parser.add_argument("--index-mapping-dir", type=str, help="Index mapping directory (for rp2 dataset)")
-    parser.add_argument("--dataset-name", type=str, help="Dataset name (deprecated)")
-    parser.add_argument("--packed-sequence", action="store_true", help="Use packed sequences")
-    parser.add_argument("--head-only", action="store_true", help="Use only head data (for rp2 dataset)")
+    parser.add_argument("--dataset_paths", nargs="*", help="Dataset paths (for rp2 dataset)")
+    parser.add_argument("--dataset_root", type=str, help="Dataset root directory (for squad datasets)")
+    parser.add_argument("--index_mapping_dir", type=str, help="Index mapping directory (for rp2 dataset)")
+    parser.add_argument("--dataset_name", type=str, help="Dataset name (deprecated)")
+    parser.add_argument("--packed_sequence", action="store_true", help="Use packed sequences")
+    parser.add_argument("--head_only", action="store_true", help="Use only head data (for rp2 dataset)")
 
     # Tokenizer configuration
     parser.add_argument(
@@ -252,26 +235,26 @@ def common_args(parser):
         help="Type of tokenizer to use",
     )
     parser.add_argument(
-        "--tokenizer-model", type=str, help="Path to tokenizer model (automatically provided by launcher)"
+        "--tokenizer_model", type=str, help="Path to tokenizer model (automatically provided by launcher)"
     )
-    parser.add_argument("--vocab-size", type=int, default=32000, help="Vocabulary size for NullTokenizer")
+    parser.add_argument("--vocab_size", type=int, default=32000, help="Vocabulary size for NullTokenizer")
 
 
-def slurm_cluster_args(parser):
+def slurm_cluster_args(parser: argparse.ArgumentParser):
     """Slurm cluster arguments."""
     parser.add_argument(
         "-a",
         "--account",
         type=str,
         help="Slurm account to use for experiment",
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "-p",
         "--partition",
         type=str,
         help="Slurm partition to use for experiment",
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "-t",
@@ -318,9 +301,22 @@ def slurm_cluster_args(parser):
         required=False,
         default=[],
     )
+    parser.add_argument(
+        "--detach",
+        help="Detach the experiment from the terminal. Disabled by default",
+        action="store_true",
+        dest="detach",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-detach",
+        help="Do not detach the experiment from the terminal. Enabled by default",
+        action="store_false",
+        dest="detach",
+    )
 
 
-def perf_specific_args(parser):
+def perf_specific_args(parser: argparse.ArgumentParser):
     """Performance specific arguments."""
     parser.add_argument(
         "-s",
@@ -361,7 +357,6 @@ def perf_specific_args(parser):
         required=False,
         default=None,
     )
-
     parser.add_argument(
         "-en",
         "--enable_nsys",
@@ -444,7 +439,7 @@ def parse_cli_args():
     common_args(parser)
 
     # Perf specific arguments
-    perf_specific_args(parser)
+    # perf_specific_args(parser)
 
     parser.add_argument(
         "-l",
