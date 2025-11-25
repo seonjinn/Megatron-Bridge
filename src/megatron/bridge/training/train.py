@@ -141,6 +141,8 @@ def train(
     rerun_state_machine = get_rerun_state_machine()
     if rerun_state_machine.current_iteration != global_state.train_state.step:
         print_rank_0(f"Setting rerun_state_machine.current_iteration to {global_state.train_state.step}...")
+        print_rank_0("This is SJ message!!!!! ")
+        # print_rank_0(f"global_state.train_state.step: {global_state.train_state.step}")
         rerun_state_machine.current_iteration = global_state.train_state.step
 
     num_floating_point_operations_so_far = global_state.train_state.floating_point_operations_so_far

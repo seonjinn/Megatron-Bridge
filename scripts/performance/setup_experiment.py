@@ -39,6 +39,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger: logging.Logger = logging.getLogger(__name__)
 
 SCRIPT_DIR: Path = Path(__file__).parent.resolve()
+SRC_DIR: Path = SCRIPT_DIR.parent.parent.resolve() / "src"
 SCRIPT_NAME: str = "run_script.py"
 
 
@@ -105,6 +106,7 @@ def main(
         + [
             f"{RUN_SCRIPT_PATH}:{RUN_SCRIPT_PATH}",
             f"{SCRIPT_DIR}:{SCRIPT_DIR}",
+            f"{SRC_DIR}:{SRC_DIR}",
         ]
     )
     logger.info(f"Custom mounts: {executor.container_mounts}")
@@ -112,11 +114,17 @@ def main(
     exp_name = f"{model_name}_{model_size}_{domain}_{task}" + (
         "_bf16" if compute_dtype == "bf16" else f"_{compute_dtype}"
     )
+    
+    # Explicitly set PYTHONPATH in the executor's environment variables to ensure
+    # it propagates to the sbatch script and container execution.
+    # This is crucial for local code modifications to be picked up.
+    executor.env_vars["PYTHONPATH"] = f"{SRC_DIR}:{SCRIPT_DIR}:$PYTHONPATH"
+
     logger.debug(
         run.Script(
             path=str(RUN_SCRIPT_PATH),
             entrypoint="python",
-            env={"PYTHONPATH": f"{SCRIPT_DIR}:$PYTHONPATH"},
+            env={"PYTHONPATH": f"{SRC_DIR}:{SCRIPT_DIR}:$PYTHONPATH"},
             args=list(sys.argv[1:]),
         )
     )
@@ -124,7 +132,8 @@ def main(
         run.Script(
             path=str(RUN_SCRIPT_PATH),
             entrypoint="python",
-            env={"PYTHONPATH": f"{SCRIPT_DIR}:$PYTHONPATH"},
+            # Redundant but harmless to keep env here too
+            env={"PYTHONPATH": f"{SRC_DIR}:{SCRIPT_DIR}:$PYTHONPATH"},
             args=list(sys.argv[1:]),
         ),
         executor=executor,
