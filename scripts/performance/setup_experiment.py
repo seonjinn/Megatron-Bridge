@@ -153,8 +153,8 @@ if __name__ == "__main__":
 
     main(
         script_name=SCRIPT_NAME,
-        model_name=args.model_name,
-        model_size=args.model_size,
+        model_name=args.model_family_name,
+        model_size=args.model_recipe_name,
         domain=args.domain,
         task=args.task,
         compute_dtype=args.compute_dtype,
