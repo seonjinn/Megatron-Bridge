@@ -46,7 +46,6 @@ def main(
     script_name: str,
     model_name: str,
     model_size: str,
-    domain: str,
     task: str,
     compute_dtype: str,
     gpu: str,
@@ -96,7 +95,6 @@ def main(
             gpu=gpu,
             compute_dtype=compute_dtype,
             use_tokendrop=use_tokendrop,
-            domain=domain,
             task=task,
         )
     )
@@ -114,9 +112,7 @@ def main(
         executor.container_mounts.extend([f"{megatron_ckpt_dir}:/mnt/megatron_ckpt"])
     logger.info(f"Custom mounts: {executor.container_mounts}")
 
-    exp_name = f"{model_name}_{model_size}_{domain}_{task}" + (
-        "_bf16" if compute_dtype == "bf16" else f"_{compute_dtype}"
-    )
+    exp_name = f"{model_name}_{model_size}_{task}" + ("_bf16" if compute_dtype == "bf16" else f"_{compute_dtype}")
     logger.debug(
         run.Script(
             path=str(RUN_SCRIPT_PATH),
@@ -155,7 +151,6 @@ if __name__ == "__main__":
         script_name=SCRIPT_NAME,
         model_name=args.model_family_name,
         model_size=args.model_recipe_name,
-        domain=args.domain,
         task=args.task,
         compute_dtype=args.compute_dtype,
         gpu=args.gpu,

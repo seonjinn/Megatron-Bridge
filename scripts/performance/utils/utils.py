@@ -99,7 +99,6 @@ def get_workload_base_config(
     model_size: str,
     gpu: str,
     compute_dtype: str,
-    domain: str,
     task: str,
 ) -> Dict[str, int]:
     """Get the workload base config for a given model, size, GPU, compute dtype, and FP8 recipe."""
