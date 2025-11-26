@@ -439,7 +439,7 @@ def parse_cli_args():
     common_args(parser)
 
     # Perf specific arguments
-    # perf_specific_args(parser)
+    perf_specific_args(parser)
 
     parser.add_argument(
         "-l",
