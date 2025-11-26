@@ -166,9 +166,9 @@ if __name__ == "__main__":
         pp_size=args.pipeline_model_parallel_size,
         cp_size=args.context_parallel_size,
         wandb_key=args.wandb_key,
-        wandb_prj_name=args.wandb_prj_name,
-        wandb_exp_name=args.wandb_exp_name,
-        megatron_ckpt_dir=args.megatron_ckpt,
+        wandb_prj_name=args.wandb_project,
+        wandb_exp_name=args.wandb_experiment_name,
+        megatron_ckpt_dir=args.pretrained_checkpoint,
         executor=slurm_executor(
             args.gpu,
             args.account,
