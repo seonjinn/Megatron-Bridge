@@ -188,6 +188,8 @@ if __name__ == "__main__":
             args.container_image,
             custom_env_vars={},
             hf_token=args.hf_token,
+            hf_home=args.hf_home,
+            hf_datasets_cache=args.hf_datasets_cache,
             nemo_home=args.nemo_home,
             wandb_key=args.wandb_key,
         ),

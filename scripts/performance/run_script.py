@@ -13,6 +13,15 @@
 # limitations under the License.
 
 import logging
+import sys
+from pathlib import Path
+
+# Add local src to sys.path to ensure local code changes are used
+SCRIPT_DIR = Path(__file__).parent.resolve()
+SRC_DIR = SCRIPT_DIR.parent.parent.resolve() / "src"
+if SRC_DIR.exists():
+    sys.path.insert(0, str(SRC_DIR))
+    print(f"Inserted {SRC_DIR} into sys.path to override installed packages")
 
 import torch
 from argument_parser import parse_cli_args

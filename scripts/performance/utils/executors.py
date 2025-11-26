@@ -45,6 +45,10 @@ PERF_ENV_VARS = {
     "TORCH_NCCL_HIGH_PRIORITY": "1",
 }
 
+# HuggingFace cache directories - read from environment or use defaults
+DEFAULT_HF_HOME = os.getenv("HF_HOME", "/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home")
+DEFAULT_HF_DATASETS_CACHE = os.getenv("HF_DATASETS_CACHE", f"{DEFAULT_HF_HOME}/cache")
+
 
 def slurm_executor(
     gpu: str,
@@ -59,6 +63,8 @@ def slurm_executor(
     custom_env_vars: Dict[str, str] = {},
     custom_srun_args: List[str] = [],
     hf_token: str = None,
+    hf_home: str = DEFAULT_HF_HOME,
+    hf_datasets_cache: str = DEFAULT_HF_DATASETS_CACHE,
     nemo_home: str = DEFAULT_NEMO_HOME,
     wandb_key: str = None,
     network: str = None,
@@ -97,6 +103,11 @@ def slurm_executor(
         mounts.extend([f"{nemo_home}:{nemo_home}"])
     if hf_token is not None:
         PERF_ENV_VARS.update({"HF_TOKEN": hf_token, "TRANSFORMERS_OFFLINE": "0"})
+    
+    # Always set HF_HOME and HF_DATASETS_CACHE for HuggingFace model/dataset caching
+    PERF_ENV_VARS["HF_HOME"] = hf_home
+    PERF_ENV_VARS["HF_DATASETS_CACHE"] = hf_datasets_cache
+    mounts.extend([f"{hf_home}:{hf_home}"])
 
     PERF_ENV_VARS.update(custom_env_vars)
     mounts.extend(custom_mounts)

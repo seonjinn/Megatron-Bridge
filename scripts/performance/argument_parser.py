@@ -25,6 +25,10 @@ logger: logging.Logger = logging.getLogger(__name__)
 DEFAULT_NEMO_CACHE_HOME = Path.home() / ".cache" / "nemo"
 DEFAULT_NEMO_HOME = os.getenv("NEMO_HOME", DEFAULT_NEMO_CACHE_HOME)
 
+# HuggingFace cache directories
+DEFAULT_HF_HOME = os.getenv("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
+DEFAULT_HF_DATASETS_CACHE = os.getenv("HF_DATASETS_CACHE", f"{DEFAULT_HF_HOME}/datasets")
+
 VALID_CUDA_GRAPH_IMPLS = ["none", "local", "transformer_engine"]
 VALID_CUDA_GRAPH_SCOPES = ["full_iteration", "attn", "mlp", "moe", "moe_router", "moe_preprocess", "mamba"]
 
@@ -150,7 +154,19 @@ def parse_cli_args():
         "--hf_token",
         type=str,
         help="HuggingFace token. Defaults to None. Required for accessing tokenizers and checkpoints.",
-        default=None,
+        default=os.getenv("HF_TOKEN", None),
+    )
+    parser.add_argument(
+        "--hf_home",
+        type=str,
+        help=f"HuggingFace home directory for model/tokenizer cache. Defaults to {DEFAULT_HF_HOME}",
+        default=DEFAULT_HF_HOME,
+    )
+    parser.add_argument(
+        "--hf_datasets_cache",
+        type=str,
+        help=f"HuggingFace datasets cache directory. Defaults to {DEFAULT_HF_DATASETS_CACHE}",
+        default=DEFAULT_HF_DATASETS_CACHE,
     )
     nemo_home_msg = [
         "Sets env var `NEMO_HOME` (on compute node using sbatch script)- directory where NeMo searches",
