@@ -38,7 +38,7 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger: logging.Logger = logging.getLogger(__name__)
 
-SCRIPT_DIR = Path("/opt/Megatron-Bridge/tests/end_to_end_tests/train_from_recipe.py").parent.resolve()
+SCRIPT_DIR = (Path(__file__).parent.parent / "tests" / "end_to_end_tests").resolve()
 SCRIPT_NAME = "train_from_recipe.py"
 
 
