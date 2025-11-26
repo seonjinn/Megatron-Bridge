@@ -323,7 +323,7 @@ def perf_specific_args(parser: argparse.ArgumentParser):
         "--model_size",
         type=lower_str,
         help="Model size to use for experiment.",
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "-g",
@@ -331,7 +331,7 @@ def perf_specific_args(parser: argparse.ArgumentParser):
         type=str,
         choices=["h100", "b200", "gb200", "gb300"],
         help="Target gpu type.",
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "-c",
@@ -347,7 +347,7 @@ def perf_specific_args(parser: argparse.ArgumentParser):
         "--num_gpus",
         type=int,
         help="Number of gpus.",
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "-vb",
