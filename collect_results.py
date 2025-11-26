@@ -93,16 +93,26 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
         r'allocated:\s*([\d.]+)\s*GB.*reserved:\s*([\d.]+)\s*GB'
     )
     
+    # Patterns to extract configuration from log files
+    # Format in logs: "  tensor_model_parallel_size: 1" or "tensor_model_parallel_size=1"
     config_patterns = {
         'tp': re.compile(r'tensor_model_parallel_size[=:\s]+(\d+)'),
         'pp': re.compile(r'pipeline_model_parallel_size[=:\s]+(\d+)'),
         'cp': re.compile(r'context_parallel_size[=:\s]+(\d+)'),
         'ep': re.compile(r'expert_model_parallel_size[=:\s]+(\d+)'),
         'dp': re.compile(r'data_parallel_size[=:\s]+(\d+)'),
-        'num_gpus': re.compile(r'world_size[=:\s]+(\d+)'),
         'micro_batch_size': re.compile(r'micro_batch_size[=:\s]+(\d+)'),
         'sequence_length': re.compile(r'(?:seq_length|sequence_length)[=:\s]+(\d+)'),
     }
+    
+    # Additional patterns to try for num_gpus (world_size)
+    num_gpus_patterns = [
+        re.compile(r'world_size[=:\s]+(\d+)', re.IGNORECASE),
+        re.compile(r'world size[=:\s]+(\d+)', re.IGNORECASE),
+        re.compile(r'Running on (\d+) GPUs', re.IGNORECASE),
+        re.compile(r'using (\d+) GPUs', re.IGNORECASE),
+        re.compile(r'num_gpus[=:\s]+(\d+)', re.IGNORECASE),
+    ]
     
     iterations = []
     
@@ -115,6 +125,19 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
                 match = pattern.search(content)
                 if match:
                     setattr(result, key, int(match.group(1)))
+            
+            # Try additional patterns for num_gpus if not found
+            if result.num_gpus == 0:
+                for pattern in num_gpus_patterns:
+                    match = pattern.search(content)
+                    if match:
+                        result.num_gpus = int(match.group(1))
+                        break
+            
+            # Calculate num_gpus from parallelism dimensions if still not found
+            # num_gpus = TP * PP * CP * DP (EP is within DP, not multiplied)
+            if result.num_gpus == 0 and result.tp > 0 and result.pp > 0 and result.dp > 0:
+                result.num_gpus = result.tp * result.pp * result.cp * result.dp
             
             # Parse memory info
             mem_match = memory_pattern.search(content)
@@ -225,6 +248,24 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                         result.job_id = parts[0]
                         result.model_name = parts[1]
                         result.model_size = parts[2]
+                        # Parse num_gpus from submitted_jobs.txt if not found in log
+                        if result.num_gpus == 0:
+                            try:
+                                result.num_gpus = int(parts[3])
+                            except (ValueError, IndexError):
+                                pass
+                        # Parse parallelism from submitted_jobs.txt as fallback
+                        if result.tp == 1 and result.pp == 1 and result.dp == 1:
+                            try:
+                                result.tp = int(parts[4])
+                                result.pp = int(parts[5])
+                                result.cp = int(parts[6])
+                                result.ep = int(parts[7])
+                                result.dp = int(parts[8])
+                            except (ValueError, IndexError):
+                                pass
+                        # Recalculate total tokens/sec with correct num_gpus
+                        result.tokens_per_sec_total = result.tokens_per_sec_per_gpu * result.num_gpus
                         results.append(result)
     
     return results
