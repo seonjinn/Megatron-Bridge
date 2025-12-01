@@ -43,6 +43,7 @@ class ExperimentResult:
     cp: int = 1
     ep: int = 1
     dp: int = 1
+    dp_per_ep: int = 1  # DP per expert group (DP / EP) - relevant for MoE models
     
     # Training configuration
     global_batch_size: int = 0
@@ -50,6 +51,7 @@ class ExperimentResult:
     sequence_length: int = 0
     max_steps: int = 0
     precision: str = ""
+    task: str = ""  # pretrain, sft, lora, etc.
     
     # Performance metrics (averaged over stable iterations)
     tokens_per_sec_per_gpu: float = 0.0
@@ -165,9 +167,22 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
                 result.max_steps = max_iter
                 result.global_batch_size = gbs
             
+            # Check for OOM (Out of Memory) errors
+            oom_patterns = [
+                'out of memory',
+                'OutOfMemoryError',
+                'CUDA out of memory',
+                'OOM',
+                'RuntimeError: CUDA error: out of memory',
+                'torch.cuda.OutOfMemoryError',
+            ]
+            has_oom = any(pattern.lower() in content.lower() for pattern in oom_patterns)
+            
             # Check completion status
             if 'Training completed' in content or iterations and iterations[-1]['iteration'] >= result.max_steps:
                 result.status = 'completed'
+            elif has_oom:
+                result.status = 'oom'  # Out of Memory
             elif iterations:
                 result.status = 'running'
             else:
@@ -239,8 +254,31 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                 continue
             
             parts = line.split('|')
+            
+            # Support multiple formats:
+            # Old: JOB_ID|MODEL|SIZE|GPUS|TP|PP|CP|EP|DP|EXP_DIR (10 fields)
+            # New: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|EXP_DIR (12 fields)
+            # Ref16: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|EXP_DIR (16 fields)
+            # Ref17: JOB_ID|MODEL|SIZE|TASK|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|VP|EXP_DIR (17 fields)
             if len(parts) >= 10:
-                exp_dir = Path(parts[9])
+                # Detect format based on number of fields
+                if len(parts) >= 17:
+                    # Reference format with TASK, SEQ_LEN, MBS, GBS, VP
+                    exp_dir = Path(parts[16])
+                    idx_offset = 3  # Additional fields: TASK, NODES, GPU_TYPE
+                elif len(parts) >= 16:
+                    # Reference format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|EXP_DIR
+                    exp_dir = Path(parts[15])
+                    idx_offset = 2  # Additional fields: NODES, GPU_TYPE
+                elif len(parts) >= 12:
+                    # New format with NODES and GPU_TYPE
+                    exp_dir = Path(parts[11])
+                    idx_offset = 2  # Additional fields: NODES, GPU_TYPE
+                else:
+                    # Old format
+                    exp_dir = Path(parts[9])
+                    idx_offset = 0
+                
                 if exp_dir.exists():
                     log_file = find_log_file(exp_dir)
                     if log_file:
@@ -248,24 +286,82 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                         result.job_id = parts[0]
                         result.model_name = parts[1]
                         result.model_size = parts[2]
+                        
                         # Parse num_gpus from submitted_jobs.txt if not found in log
                         if result.num_gpus == 0:
                             try:
                                 result.num_gpus = int(parts[3])
                             except (ValueError, IndexError):
                                 pass
+                        
+                        # Parse nodes and GPU type based on format
+                        if len(parts) >= 17:
+                            # Reference format: TASK is at parts[3]
+                            try:
+                                result.num_gpus = int(parts[4])
+                                result.num_nodes = int(parts[5])
+                                result.gpu_type = parts[6]
+                                if result.num_nodes > 0:
+                                    result.gpus_per_node = result.num_gpus // result.num_nodes
+                            except (ValueError, IndexError):
+                                pass
+                        elif len(parts) >= 16:
+                            # 16-field format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|EXP_DIR
+                            try:
+                                result.num_gpus = int(parts[3])
+                                result.num_nodes = int(parts[4])
+                                result.gpu_type = parts[5]
+                                result.precision = parts[14]
+                                if result.num_nodes > 0:
+                                    result.gpus_per_node = result.num_gpus // result.num_nodes
+                            except (ValueError, IndexError):
+                                pass
+                        elif len(parts) >= 12:
+                            try:
+                                result.num_nodes = int(parts[4])
+                                result.gpu_type = parts[5]
+                                # Calculate gpus_per_node
+                                if result.num_nodes > 0:
+                                    result.gpus_per_node = result.num_gpus // result.num_nodes
+                            except (ValueError, IndexError):
+                                pass
+                        else:
+                            # Old format: assume GB200 with 4 GPUs/node (default for existing experiments)
+                            result.gpu_type = "gb200"
+                            result.gpus_per_node = 4
+                            result.num_nodes = result.num_gpus // result.gpus_per_node if result.num_gpus > 0 else 0
+                        
                         # Parse parallelism from submitted_jobs.txt as fallback
                         if result.tp == 1 and result.pp == 1 and result.dp == 1:
                             try:
-                                result.tp = int(parts[4])
-                                result.pp = int(parts[5])
-                                result.cp = int(parts[6])
-                                result.ep = int(parts[7])
-                                result.dp = int(parts[8])
+                                if len(parts) >= 17:
+                                    # 17-field Reference format
+                                    result.tp = int(parts[7])
+                                    result.pp = int(parts[8])
+                                    result.cp = int(parts[9])
+                                    result.ep = int(parts[10])
+                                    result.dp = int(parts[11])
+                                elif len(parts) >= 16:
+                                    # 16-field format: TP at index 6
+                                    result.tp = int(parts[6])
+                                    result.pp = int(parts[7])
+                                    result.cp = int(parts[8])
+                                    result.ep = int(parts[9])
+                                    result.dp = int(parts[10])
+                                else:
+                                    result.tp = int(parts[4 + idx_offset])
+                                    result.pp = int(parts[5 + idx_offset])
+                                    result.cp = int(parts[6 + idx_offset])
+                                    result.ep = int(parts[7 + idx_offset])
+                                    result.dp = int(parts[8 + idx_offset])
                             except (ValueError, IndexError):
                                 pass
+                        
                         # Recalculate total tokens/sec with correct num_gpus
                         result.tokens_per_sec_total = result.tokens_per_sec_per_gpu * result.num_gpus
+                        # Calculate DP per expert group for MoE models
+                        if result.ep > 0:
+                            result.dp_per_ep = result.dp // result.ep
                         results.append(result)
     
     return results
@@ -297,7 +393,8 @@ def save_results_csv(results: list[ExperimentResult], output_path: Path):
     """Save results to CSV file."""
     fieldnames = [
         'exp_name', 'status', 'model_name', 'model_size',
-        'num_gpus', 'tp', 'pp', 'cp', 'ep', 'dp',
+        'gpu_type', 'num_nodes', 'gpus_per_node', 'num_gpus',
+        'tp', 'pp', 'cp', 'ep', 'dp', 'dp_per_ep',
         'global_batch_size', 'sequence_length',
         'tokens_per_sec_per_gpu', 'tokens_per_sec_total',
         'tflops_per_gpu', 'iteration_time_ms', 'samples_per_sec',
@@ -342,43 +439,141 @@ def print_summary_table(results: list[ExperimentResult]):
         print("No results to display.")
         return
     
-    # Header
-    print("\n" + "=" * 140)
-    print(f"{'Experiment':<40} {'Status':<10} {'GPUs':>5} {'TP':>3} {'PP':>3} {'CP':>3} {'DP':>3} "
-          f"{'Tok/s/GPU':>12} {'TFLOP/s':>10} {'Iter(ms)':>10} {'Samples/s':>10}")
-    print("=" * 140)
+    # Check if any experiment has EP > 1 (MoE model)
+    has_moe = any(r.ep > 1 for r in results)
     
-    # Sort by tokens/sec/gpu descending
-    sorted_results = sorted(results, key=lambda x: x.tokens_per_sec_per_gpu, reverse=True)
+    # Color codes
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    RESET = '\033[0m'
     
-    for r in sorted_results:
-        status_color = {
-            'completed': '\033[92m',  # Green
-            'running': '\033[93m',    # Yellow
-            'failed': '\033[91m',     # Red
-            'error': '\033[91m',
-        }.get(r.status, '')
-        reset = '\033[0m' if status_color else ''
+    # Status color mapping
+    status_colors = {
+        'completed': GREEN,
+        'running': YELLOW,
+        'failed': RED,
+        'error': RED,
+        'oom': RED,
+    }
+    
+    # Column widths
+    COL_EXP = 44
+    COL_STATUS = 12
+    COL_GPU = 8
+    COL_NODES = 6
+    COL_GPUS = 6
+    COL_PARA = 4  # TP, PP, CP, EP, DP
+    COL_DPEP = 6
+    COL_METRIC = 12
+    
+    # Calculate total width
+    if has_moe:
+        total_width = COL_EXP + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + COL_DPEP + (COL_METRIC * 4)
+    else:
+        total_width = COL_EXP + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + (COL_METRIC * 4)
+    
+    # Build header
+    if has_moe:
+        header = (f"{'Experiment':<{COL_EXP}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
+                  f"{'Nodes':>{COL_NODES}}{'GPUs':>{COL_GPUS}}"
+                  f"{'TP':>{COL_PARA}}{'PP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'DP':>{COL_PARA}}{'DP/EP':>{COL_DPEP}}"
+                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}{'Samples/s':>{COL_METRIC}}")
+    else:
+        header = (f"{'Experiment':<{COL_EXP}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
+                  f"{'Nodes':>{COL_NODES}}{'GPUs':>{COL_GPUS}}"
+                  f"{'TP':>{COL_PARA}}{'PP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'DP':>{COL_PARA}}"
+                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}{'Samples/s':>{COL_METRIC}}")
+    
+    # Group results by model (model_name + model_size)
+    from collections import defaultdict
+    model_groups = defaultdict(list)
+    for r in results:
+        model_key = f"{r.model_name}_{r.model_size}" if r.model_name else "unknown"
+        model_groups[model_key].append(r)
+    
+    # Sort each group by tokens/sec/gpu descending
+    for model_key in model_groups:
+        model_groups[model_key] = sorted(
+            model_groups[model_key], 
+            key=lambda x: x.tokens_per_sec_per_gpu, 
+            reverse=True
+        )
+    
+    # Sort model groups by best throughput in each group (descending)
+    sorted_model_keys = sorted(
+        model_groups.keys(),
+        key=lambda k: max(r.tokens_per_sec_per_gpu for r in model_groups[k]),
+        reverse=True
+    )
+    
+    # Print header
+    print("\n" + "=" * total_width)
+    print(header)
+    print("=" * total_width)
+    
+    # Print each model group
+    for i, model_key in enumerate(sorted_model_keys):
+        group_results = model_groups[model_key]
         
-        print(f"{r.exp_name:<40} {status_color}{r.status:<10}{reset} "
-              f"{r.num_gpus:>5} {r.tp:>3} {r.pp:>3} {r.cp:>3} {r.dp:>3} "
-              f"{r.tokens_per_sec_per_gpu:>12.1f} {r.tflops_per_gpu:>10.1f} "
-              f"{r.iteration_time_ms:>10.1f} {r.samples_per_sec:>10.1f}")
+        # Print model group separator (except for first group)
+        if i > 0:
+            print("-" * total_width)
+        
+        for r in group_results:
+            # Format status display (show "OOM" for out of memory)
+            status_display = "OOM" if r.status == 'oom' else r.status
+            color = status_colors.get(r.status, '')
+            
+            # Format GPU type (truncate if too long)
+            gpu_str = (r.gpu_type[:COL_GPU-1] if r.gpu_type else "?")
+            
+            # Build the row without colors first for proper alignment
+            if has_moe:
+                row = (f"{r.exp_name:<{COL_EXP}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
+                       f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
+                       f"{r.tp:>{COL_PARA}}{r.pp:>{COL_PARA}}{r.cp:>{COL_PARA}}{r.ep:>{COL_PARA}}{r.dp:>{COL_PARA}}{r.dp_per_ep:>{COL_DPEP}}"
+                       f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
+                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}{r.samples_per_sec:>{COL_METRIC}.1f}")
+            else:
+                row = (f"{r.exp_name:<{COL_EXP}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
+                       f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
+                       f"{r.tp:>{COL_PARA}}{r.pp:>{COL_PARA}}{r.cp:>{COL_PARA}}{r.ep:>{COL_PARA}}{r.dp:>{COL_PARA}}"
+                       f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
+                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}{r.samples_per_sec:>{COL_METRIC}.1f}")
+            
+            # Apply color to status only (replace status in the row)
+            if color:
+                colored_status = f"{color}{status_display:<{COL_STATUS}}{RESET}"
+                # Replace the plain status with colored version
+                row = row[:COL_EXP] + colored_status + row[COL_EXP + COL_STATUS:]
+            
+            print(row)
     
-    print("=" * 140)
+    print("=" * total_width)
     
     # Summary statistics
     completed = [r for r in results if r.status == 'completed']
+    oom_count = sum(1 for r in results if r.status == 'oom')
+    failed_count = sum(1 for r in results if r.status in ('failed', 'error'))
+    running_count = sum(1 for r in results if r.status == 'running')
+    
+    print(f"\nSummary:")
+    print(f"  Total: {len(results)} | Completed: {len(completed)} | Running: {running_count} | Failed: {failed_count} | \033[91mOOM: {oom_count}\033[0m")
+    
     if completed:
         avg_tokens = sum(r.tokens_per_sec_per_gpu for r in completed) / len(completed)
         max_tokens = max(r.tokens_per_sec_per_gpu for r in completed)
         best = max(completed, key=lambda x: x.tokens_per_sec_per_gpu)
         
-        print(f"\nSummary ({len(completed)} completed experiments):")
         print(f"  Average Tokens/sec/GPU: {avg_tokens:.1f}")
         print(f"  Best Tokens/sec/GPU: {max_tokens:.1f}")
         print(f"  Best configuration: {best.exp_name}")
-        print(f"    TP={best.tp}, PP={best.pp}, CP={best.cp}, DP={best.dp}")
+        print(f"    GPU: {best.gpu_type}, Nodes: {best.num_nodes}, GPUs: {best.num_gpus}")
+        if best.ep > 1:
+            print(f"    TP={best.tp}, PP={best.pp}, CP={best.cp}, EP={best.ep}, DP={best.dp}, DP/EP={best.dp_per_ep}")
+        else:
+            print(f"    TP={best.tp}, PP={best.pp}, CP={best.cp}, EP={best.ep}, DP={best.dp}")
 
 
 def main():
