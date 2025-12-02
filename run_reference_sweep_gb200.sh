@@ -52,7 +52,7 @@ GPU_TYPE="gb200"
 GPUS_PER_NODE=4  # GB200 has 4 GPUs per node
 
 # HuggingFace settings
-HF_TOKEN="${HF_TOKEN:-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}"
+HF_TOKEN="${HF_TOKEN:-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}"
 HF_HOME="${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}"
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/cache}"
 
@@ -136,7 +136,7 @@ QWEN3_235B_CONFIGS=(
 LLAMA3_8B_PRETRAIN_CONFIGS=(
     "llama3 8b 8 8192 1 1 1 1 1 2 128 fp8_cs pretrain"
     "llama3 8b 8 8192 1 1 1 1 1 2 128 fp8_mx pretrain"
-    "llama3 8b 8 8192 1 1 1 1 1 2 128 nvfp4 pretrain"
+    # "llama3 8b 8 8192 1 1 1 1 1 2 128 nvfp4 pretrain"
 )
 
 # ============================================================================
@@ -162,7 +162,7 @@ LLAMA3_8B_SFT_CONFIGS=(
 LLAMA3_70B_PRETRAIN_CONFIGS=(
     "llama3 70b 64 8192 1 1 1 1 1 2 128 fp8_cs pretrain"
     "llama3 70b 64 8192 2 4 1 1 5 1 128 fp8_mx pretrain"
-    "llama3 70b 64 8192 2 4 1 1 5 1 128 nvfp4 pretrain"
+    # "llama3 70b 64 8192 2 4 1 1 5 1 128 nvfp4 pretrain"
 )
 
 # ============================================================================
