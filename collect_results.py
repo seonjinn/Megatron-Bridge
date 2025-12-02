@@ -298,6 +298,7 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                         if len(parts) >= 17:
                             # Reference format: TASK is at parts[3]
                             try:
+                                result.task = parts[3]
                                 result.num_gpus = int(parts[4])
                                 result.num_nodes = int(parts[5])
                                 result.gpu_type = parts[6]
@@ -314,6 +315,14 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                                 result.precision = parts[14]
                                 if result.num_nodes > 0:
                                     result.gpus_per_node = result.num_gpus // result.num_nodes
+                                # Try to infer task from exp_dir name
+                                exp_dir_name = str(exp_dir).lower()
+                                if 'pretrain' in exp_dir_name:
+                                    result.task = 'pretrain'
+                                elif 'sft' in exp_dir_name:
+                                    result.task = 'sft'
+                                elif 'lora' in exp_dir_name:
+                                    result.task = 'lora'
                             except (ValueError, IndexError):
                                 pass
                         elif len(parts) >= 12:
@@ -392,10 +401,10 @@ def collect_latest(base_dir: Path, n: int) -> list[ExperimentResult]:
 def save_results_csv(results: list[ExperimentResult], output_path: Path):
     """Save results to CSV file."""
     fieldnames = [
-        'exp_name', 'status', 'model_name', 'model_size',
+        'exp_name', 'status', 'model_name', 'model_size', 'task', 'precision',
         'gpu_type', 'num_nodes', 'gpus_per_node', 'num_gpus',
         'tp', 'pp', 'cp', 'ep', 'dp', 'dp_per_ep',
-        'global_batch_size', 'sequence_length',
+        'global_batch_size', 'micro_batch_size', 'sequence_length',
         'tokens_per_sec_per_gpu', 'tokens_per_sec_total',
         'tflops_per_gpu', 'iteration_time_ms', 'samples_per_sec',
         'tokens_per_sec_per_gpu_min', 'tokens_per_sec_per_gpu_max', 'tokens_per_sec_per_gpu_std',
@@ -458,32 +467,37 @@ def print_summary_table(results: list[ExperimentResult]):
     }
     
     # Column widths
-    COL_EXP = 44
-    COL_STATUS = 12
-    COL_GPU = 8
-    COL_NODES = 6
-    COL_GPUS = 6
-    COL_PARA = 4  # TP, PP, CP, EP, DP
-    COL_DPEP = 6
-    COL_METRIC = 12
+    COL_MODEL = 18
+    COL_TASK = 9  # pretrain, sft, lora
+    COL_PREC = 8  # fp8_cs, fp8_mx, nvfp4, bf16
+    COL_STATUS = 10
+    COL_GPU = 6
+    COL_NODES = 4
+    COL_GPUS = 5
+    COL_PARA = 3  # TP, PP, CP, EP, DP
+    COL_DPEP = 4
+    COL_METRIC = 10
+    # Directory column - no fixed width, will be appended at the end
     
-    # Calculate total width
+    # Calculate total width (without directory column - it will extend beyond)
     if has_moe:
-        total_width = COL_EXP + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + COL_DPEP + (COL_METRIC * 4)
+        total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + COL_DPEP + (COL_METRIC * 3) + 2
     else:
-        total_width = COL_EXP + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + (COL_METRIC * 4)
+        total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + (COL_METRIC * 3) + 2
     
     # Build header
     if has_moe:
-        header = (f"{'Experiment':<{COL_EXP}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
-                  f"{'Nodes':>{COL_NODES}}{'GPUs':>{COL_GPUS}}"
-                  f"{'TP':>{COL_PARA}}{'PP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'DP':>{COL_PARA}}{'DP/EP':>{COL_DPEP}}"
-                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}{'Samples/s':>{COL_METRIC}}")
+        header = (f"{'Model':<{COL_MODEL}}{'Task':<{COL_TASK}}{'Prec':<{COL_PREC}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
+                  f"{'N':>{COL_NODES}}{'#GPU':>{COL_GPUS}}"
+                  f"{'TP':>{COL_PARA}}{'PP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'DP':>{COL_PARA}}{'D/E':>{COL_DPEP}}"
+                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}"
+                  f"  Exp Directory")
     else:
-        header = (f"{'Experiment':<{COL_EXP}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
-                  f"{'Nodes':>{COL_NODES}}{'GPUs':>{COL_GPUS}}"
+        header = (f"{'Model':<{COL_MODEL}}{'Task':<{COL_TASK}}{'Prec':<{COL_PREC}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
+                  f"{'N':>{COL_NODES}}{'#GPU':>{COL_GPUS}}"
                   f"{'TP':>{COL_PARA}}{'PP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'DP':>{COL_PARA}}"
-                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}{'Samples/s':>{COL_METRIC}}")
+                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}"
+                  f"  Exp Directory")
     
     # Group results by model (model_name + model_size)
     from collections import defaultdict
@@ -525,28 +539,45 @@ def print_summary_table(results: list[ExperimentResult]):
             status_display = "OOM" if r.status == 'oom' else r.status
             color = status_colors.get(r.status, '')
             
+            # Format model name (combine model_name and model_size)
+            model_str = f"{r.model_name}_{r.model_size}"
+            if len(model_str) > COL_MODEL - 1:
+                model_str = model_str[:COL_MODEL - 1]
+            
+            # Format task (truncate if too long)
+            task_str = (r.task[:COL_TASK-1] if r.task else "-")
+            
+            # Format precision (truncate if too long)
+            prec_str = (r.precision[:COL_PREC-1] if r.precision else "-")
+            
             # Format GPU type (truncate if too long)
             gpu_str = (r.gpu_type[:COL_GPU-1] if r.gpu_type else "?")
             
+            # Format exp directory (just the directory name, not full path - no truncation)
+            exp_dir_name = Path(r.exp_dir).name if r.exp_dir else "-"
+            
             # Build the row without colors first for proper alignment
             if has_moe:
-                row = (f"{r.exp_name:<{COL_EXP}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
+                row = (f"{model_str:<{COL_MODEL}}{task_str:<{COL_TASK}}{prec_str:<{COL_PREC}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
                        f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
                        f"{r.tp:>{COL_PARA}}{r.pp:>{COL_PARA}}{r.cp:>{COL_PARA}}{r.ep:>{COL_PARA}}{r.dp:>{COL_PARA}}{r.dp_per_ep:>{COL_DPEP}}"
                        f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
-                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}{r.samples_per_sec:>{COL_METRIC}.1f}")
+                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}"
+                       f"  {exp_dir_name}")
             else:
-                row = (f"{r.exp_name:<{COL_EXP}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
+                row = (f"{model_str:<{COL_MODEL}}{task_str:<{COL_TASK}}{prec_str:<{COL_PREC}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
                        f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
                        f"{r.tp:>{COL_PARA}}{r.pp:>{COL_PARA}}{r.cp:>{COL_PARA}}{r.ep:>{COL_PARA}}{r.dp:>{COL_PARA}}"
                        f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
-                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}{r.samples_per_sec:>{COL_METRIC}.1f}")
+                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}"
+                       f"  {exp_dir_name}")
             
             # Apply color to status only (replace status in the row)
+            status_start = COL_MODEL + COL_TASK + COL_PREC
             if color:
                 colored_status = f"{color}{status_display:<{COL_STATUS}}{RESET}"
                 # Replace the plain status with colored version
-                row = row[:COL_EXP] + colored_status + row[COL_EXP + COL_STATUS:]
+                row = row[:status_start] + colored_status + row[status_start + COL_STATUS:]
             
             print(row)
     
