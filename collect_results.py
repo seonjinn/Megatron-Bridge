@@ -25,6 +25,7 @@ class ExperimentResult:
     # Experiment identification
     exp_name: str = ""
     exp_dir: str = ""
+    log_file_path: str = ""  # Full path to log file (for clickable links)
     job_id: str = ""
     
     # Model configuration
@@ -38,11 +39,14 @@ class ExperimentResult:
     gpu_type: str = ""
     
     # Parallelism configuration
+    fsdp: int = 0  # Megatron FSDP (0 = disabled, 1 = enabled)
     tp: int = 1
     pp: int = 1
     cp: int = 1
-    ep: int = 1
     dp: int = 1
+    ep: int = 1
+    vp: int = 1  # Virtual Pipeline Parallelism
+    etp: int = 1  # Expert Tensor Parallelism
     dp_per_ep: int = 1  # DP per expert group (DP / EP) - relevant for MoE models
     
     # Training configuration
@@ -82,6 +86,7 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
     result = ExperimentResult()
     result.exp_dir = str(log_path.parent.parent)
     result.exp_name = log_path.parent.parent.name
+    result.log_file_path = str(log_path.resolve())  # Store full absolute path for clickable links
     
     iteration_pattern = re.compile(
         r'iteration\s+(\d+)/\s*(\d+)\s*\|'
@@ -103,9 +108,14 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
         'cp': re.compile(r'context_parallel_size[=:\s]+(\d+)'),
         'ep': re.compile(r'expert_model_parallel_size[=:\s]+(\d+)'),
         'dp': re.compile(r'data_parallel_size[=:\s]+(\d+)'),
+        'vp': re.compile(r'virtual_pipeline_model_parallel_size[=:\s]+(\d+)'),
+        'etp': re.compile(r'expert_tensor_parallel_size[=:\s]+(\d+)'),
         'micro_batch_size': re.compile(r'micro_batch_size[=:\s]+(\d+)'),
         'sequence_length': re.compile(r'(?:seq_length|sequence_length)[=:\s]+(\d+)'),
     }
+    
+    # Boolean patterns (FSDP)
+    fsdp_pattern = re.compile(r'use_megatron_fsdp[=:\s]+(True|true|1)')
     
     # Additional patterns to try for num_gpus (world_size)
     num_gpus_patterns = [
@@ -127,6 +137,10 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
                 match = pattern.search(content)
                 if match:
                     setattr(result, key, int(match.group(1)))
+            
+            # Parse FSDP (boolean)
+            if fsdp_pattern.search(content):
+                result.fsdp = 1
             
             # Try additional patterns for num_gpus if not found
             if result.num_gpus == 0:
@@ -259,13 +273,26 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
             # Old: JOB_ID|MODEL|SIZE|GPUS|TP|PP|CP|EP|DP|EXP_DIR (10 fields)
             # New: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|EXP_DIR (12 fields)
             # Ref16: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|EXP_DIR (16 fields)
-            # Ref17: JOB_ID|MODEL|SIZE|TASK|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|VP|EXP_DIR (17 fields)
+            # Ref17: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR (17 fields)
+            # Ref18: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR (18 fields)
+            # Ref20: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR (20 fields)
             if len(parts) >= 10:
                 # Detect format based on number of fields
-                if len(parts) >= 17:
-                    # Reference format with TASK, SEQ_LEN, MBS, GBS, VP
+                if len(parts) >= 20:
+                    # New Reference format with VP, ETP, FSDP, and TASK fields
+                    # JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                    exp_dir = Path(parts[19])
+                    idx_offset = 2  # Additional fields: NODES, GPU_TYPE
+                elif len(parts) >= 18:
+                    # Reference format with VP and TASK fields (no ETP, FSDP)
+                    # JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                    exp_dir = Path(parts[17])
+                    idx_offset = 2  # Additional fields: NODES, GPU_TYPE
+                elif len(parts) >= 17:
+                    # Reference format with TASK field (no VP)
+                    # JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
                     exp_dir = Path(parts[16])
-                    idx_offset = 3  # Additional fields: TASK, NODES, GPU_TYPE
+                    idx_offset = 2  # Additional fields: NODES, GPU_TYPE
                 elif len(parts) >= 16:
                     # Reference format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|EXP_DIR
                     exp_dir = Path(parts[15])
@@ -295,13 +322,51 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                                 pass
                         
                         # Parse nodes and GPU type based on format
-                        if len(parts) >= 17:
-                            # Reference format: TASK is at parts[3]
+                        if len(parts) >= 20:
+                            # 20-field format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
                             try:
-                                result.task = parts[3]
-                                result.num_gpus = int(parts[4])
-                                result.num_nodes = int(parts[5])
-                                result.gpu_type = parts[6]
+                                result.num_gpus = int(parts[3])
+                                result.num_nodes = int(parts[4])
+                                result.gpu_type = parts[5]
+                                result.vp = int(parts[11])
+                                result.etp = int(parts[12])
+                                result.fsdp = int(parts[13])
+                                result.sequence_length = int(parts[14])
+                                result.micro_batch_size = int(parts[15])
+                                result.global_batch_size = int(parts[16])
+                                result.precision = parts[17]
+                                result.task = parts[18]
+                                if result.num_nodes > 0:
+                                    result.gpus_per_node = result.num_gpus // result.num_nodes
+                            except (ValueError, IndexError):
+                                pass
+                        elif len(parts) >= 18:
+                            # 18-field format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                            try:
+                                result.num_gpus = int(parts[3])
+                                result.num_nodes = int(parts[4])
+                                result.gpu_type = parts[5]
+                                result.vp = int(parts[11])
+                                result.sequence_length = int(parts[12])
+                                result.micro_batch_size = int(parts[13])
+                                result.global_batch_size = int(parts[14])
+                                result.precision = parts[15]
+                                result.task = parts[16]
+                                if result.num_nodes > 0:
+                                    result.gpus_per_node = result.num_gpus // result.num_nodes
+                            except (ValueError, IndexError):
+                                pass
+                        elif len(parts) >= 17:
+                            # 17-field format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                            try:
+                                result.num_gpus = int(parts[3])
+                                result.num_nodes = int(parts[4])
+                                result.gpu_type = parts[5]
+                                result.sequence_length = int(parts[11])
+                                result.micro_batch_size = int(parts[12])
+                                result.global_batch_size = int(parts[13])
+                                result.precision = parts[14]
+                                result.task = parts[15]
                                 if result.num_nodes > 0:
                                     result.gpus_per_node = result.num_gpus // result.num_nodes
                             except (ValueError, IndexError):
@@ -343,13 +408,31 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                         # Parse parallelism from submitted_jobs.txt as fallback
                         if result.tp == 1 and result.pp == 1 and result.dp == 1:
                             try:
-                                if len(parts) >= 17:
-                                    # 17-field Reference format
-                                    result.tp = int(parts[7])
-                                    result.pp = int(parts[8])
-                                    result.cp = int(parts[9])
-                                    result.ep = int(parts[10])
-                                    result.dp = int(parts[11])
+                                if len(parts) >= 20:
+                                    # 20-field format: TP at index 6, VP at index 11, ETP at index 12, FSDP at index 13
+                                    result.tp = int(parts[6])
+                                    result.pp = int(parts[7])
+                                    result.cp = int(parts[8])
+                                    result.ep = int(parts[9])
+                                    result.dp = int(parts[10])
+                                    result.vp = int(parts[11])
+                                    result.etp = int(parts[12])
+                                    result.fsdp = int(parts[13])
+                                elif len(parts) >= 18:
+                                    # 18-field format: TP at index 6, VP at index 11
+                                    result.tp = int(parts[6])
+                                    result.pp = int(parts[7])
+                                    result.cp = int(parts[8])
+                                    result.ep = int(parts[9])
+                                    result.dp = int(parts[10])
+                                    result.vp = int(parts[11])
+                                elif len(parts) >= 17:
+                                    # 17-field format: TP at index 6 (same as 16-field)
+                                    result.tp = int(parts[6])
+                                    result.pp = int(parts[7])
+                                    result.cp = int(parts[8])
+                                    result.ep = int(parts[9])
+                                    result.dp = int(parts[10])
                                 elif len(parts) >= 16:
                                     # 16-field format: TP at index 6
                                     result.tp = int(parts[6])
@@ -403,13 +486,13 @@ def save_results_csv(results: list[ExperimentResult], output_path: Path):
     fieldnames = [
         'exp_name', 'status', 'model_name', 'model_size', 'task', 'precision',
         'gpu_type', 'num_nodes', 'gpus_per_node', 'num_gpus',
-        'tp', 'pp', 'cp', 'ep', 'dp', 'dp_per_ep',
-        'global_batch_size', 'micro_batch_size', 'sequence_length',
+        'fsdp', 'tp', 'pp', 'cp', 'dp', 'ep', 'vp', 'etp',
+        'micro_batch_size', 'global_batch_size', 'sequence_length', 'dp_per_ep',
         'tokens_per_sec_per_gpu', 'tokens_per_sec_total',
         'tflops_per_gpu', 'iteration_time_ms', 'samples_per_sec',
         'tokens_per_sec_per_gpu_min', 'tokens_per_sec_per_gpu_max', 'tokens_per_sec_per_gpu_std',
         'memory_allocated_gb', 'memory_reserved_gb',
-        'total_iterations', 'max_steps', 'exp_dir'
+        'total_iterations', 'max_steps', 'exp_dir', 'log_file_path'
     ]
     
     with open(output_path, 'w', newline='') as f:
@@ -448,13 +531,11 @@ def print_summary_table(results: list[ExperimentResult]):
         print("No results to display.")
         return
     
-    # Check if any experiment has EP > 1 (MoE model)
-    has_moe = any(r.ep > 1 for r in results)
-    
     # Color codes
     GREEN = '\033[92m'
     YELLOW = '\033[93m'
     RED = '\033[91m'
+    GRAY = '\033[90m'  # Gray/dim text for log paths
     RESET = '\033[0m'
     
     # Status color mapping
@@ -474,30 +555,41 @@ def print_summary_table(results: list[ExperimentResult]):
     COL_GPU = 6
     COL_NODES = 4
     COL_GPUS = 5
-    COL_PARA = 3  # TP, PP, CP, EP, DP
-    COL_DPEP = 4
+    COL_FSDP = 2  # F (FSDP flag)
+    COL_PARA = 3  # TP, PP, CP, DP, EP, VP, ETP
+    COL_BATCH = 5  # MBS, GBS
     COL_METRIC = 10
     # Directory column - no fixed width, will be appended at the end
     
-    # Calculate total width (without directory column - it will extend beyond)
-    if has_moe:
-        total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + COL_DPEP + (COL_METRIC * 3) + 2
-    else:
-        total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS + (COL_PARA * 5) + (COL_METRIC * 3) + 2
+    # Check if any experiment has VP > 1 or ETP > 1
+    has_vp = any(r.vp > 1 for r in results)
+    has_etp = any(r.etp > 1 for r in results)
+    has_fsdp = any(r.fsdp > 0 for r in results)
     
-    # Build header
-    if has_moe:
-        header = (f"{'Model':<{COL_MODEL}}{'Task':<{COL_TASK}}{'Prec':<{COL_PREC}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
-                  f"{'N':>{COL_NODES}}{'#GPU':>{COL_GPUS}}"
-                  f"{'TP':>{COL_PARA}}{'PP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'DP':>{COL_PARA}}{'D/E':>{COL_DPEP}}"
-                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}"
-                  f"  Exp Directory")
-    else:
-        header = (f"{'Model':<{COL_MODEL}}{'Task':<{COL_TASK}}{'Prec':<{COL_PREC}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
-                  f"{'N':>{COL_NODES}}{'#GPU':>{COL_GPUS}}"
-                  f"{'TP':>{COL_PARA}}{'PP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'DP':>{COL_PARA}}"
-                  f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}"
-                  f"  Exp Directory")
+    # Calculate total width (without directory column - it will extend beyond)
+    # Base: Model + Task + Prec + Status + GPU + N + #GPU + TP + PP + CP + DP + EP + MBS + GBS + 3 metrics
+    total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS
+    total_width += COL_FSDP if has_fsdp else 0
+    total_width += (COL_PARA * 5)  # TP, PP, CP, DP, EP
+    total_width += COL_PARA if has_vp else 0  # VP
+    total_width += COL_PARA if has_etp else 0  # ETP
+    total_width += (COL_BATCH * 2)  # MBS, GBS
+    total_width += (COL_METRIC * 3) + 2  # metrics + spacing
+    
+    # Build header dynamically
+    # Order: FSDP → TP → CP → EP → PP → DP → VP → ETP → MBS → GBS
+    header = f"{'Model':<{COL_MODEL}}{'Task':<{COL_TASK}}{'Prec':<{COL_PREC}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
+    header += f"{'N':>{COL_NODES}}{'#GPU':>{COL_GPUS}}"
+    if has_fsdp:
+        header += f"{'F':>{COL_FSDP}}"  # FSDP flag
+    header += f"{'TP':>{COL_PARA}}{'CP':>{COL_PARA}}{'EP':>{COL_PARA}}{'PP':>{COL_PARA}}{'DP':>{COL_PARA}}"
+    if has_vp:
+        header += f"{'VP':>{COL_PARA}}"
+    if has_etp:
+        header += f"{'ET':>{COL_PARA}}"  # ETP shortened to ET
+    header += f"{'MBS':>{COL_BATCH}}{'GBS':>{COL_BATCH}}"
+    header += f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}"
+    # Removed Exp Directory from header - will show log path below each row
     
     # Group results by model (model_name + model_size)
     from collections import defaultdict
@@ -553,24 +645,20 @@ def print_summary_table(results: list[ExperimentResult]):
             # Format GPU type (truncate if too long)
             gpu_str = (r.gpu_type[:COL_GPU-1] if r.gpu_type else "?")
             
-            # Format exp directory (just the directory name, not full path - no truncation)
-            exp_dir_name = Path(r.exp_dir).name if r.exp_dir else "-"
-            
-            # Build the row without colors first for proper alignment
-            if has_moe:
-                row = (f"{model_str:<{COL_MODEL}}{task_str:<{COL_TASK}}{prec_str:<{COL_PREC}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
-                       f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
-                       f"{r.tp:>{COL_PARA}}{r.pp:>{COL_PARA}}{r.cp:>{COL_PARA}}{r.ep:>{COL_PARA}}{r.dp:>{COL_PARA}}{r.dp_per_ep:>{COL_DPEP}}"
-                       f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
-                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}"
-                       f"  {exp_dir_name}")
-            else:
-                row = (f"{model_str:<{COL_MODEL}}{task_str:<{COL_TASK}}{prec_str:<{COL_PREC}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
-                       f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
-                       f"{r.tp:>{COL_PARA}}{r.pp:>{COL_PARA}}{r.cp:>{COL_PARA}}{r.ep:>{COL_PARA}}{r.dp:>{COL_PARA}}"
-                       f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
-                       f"{r.iteration_time_ms:>{COL_METRIC}.1f}"
-                       f"  {exp_dir_name}")
+            # Build the row dynamically based on which columns are present
+            # Order: FSDP → TP → CP → EP → PP → DP → VP → ETP → MBS → GBS
+            row = f"{model_str:<{COL_MODEL}}{task_str:<{COL_TASK}}{prec_str:<{COL_PREC}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
+            row += f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
+            if has_fsdp:
+                row += f"{r.fsdp:>{COL_FSDP}}"
+            row += f"{r.tp:>{COL_PARA}}{r.cp:>{COL_PARA}}{r.ep:>{COL_PARA}}{r.pp:>{COL_PARA}}{r.dp:>{COL_PARA}}"
+            if has_vp:
+                row += f"{r.vp:>{COL_PARA}}"
+            if has_etp:
+                row += f"{r.etp:>{COL_PARA}}"
+            row += f"{r.micro_batch_size:>{COL_BATCH}}{r.global_batch_size:>{COL_BATCH}}"
+            row += f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
+            row += f"{r.iteration_time_ms:>{COL_METRIC}.1f}"
             
             # Apply color to status only (replace status in the row)
             status_start = COL_MODEL + COL_TASK + COL_PREC
@@ -580,6 +668,11 @@ def print_summary_table(results: list[ExperimentResult]):
                 row = row[:status_start] + colored_status + row[status_start + COL_STATUS:]
             
             print(row)
+            
+            # Print log file path below in gray (clickable in terminal)
+            log_path = r.log_file_path if r.log_file_path else (str(Path(r.exp_dir) / "log-*.out") if r.exp_dir else "")
+            if log_path:
+                print(f"{GRAY}  └─ {log_path}{RESET}")
     
     print("=" * total_width)
     
@@ -601,10 +694,15 @@ def print_summary_table(results: list[ExperimentResult]):
         print(f"  Best Tokens/sec/GPU: {max_tokens:.1f}")
         print(f"  Best configuration: {best.exp_name}")
         print(f"    GPU: {best.gpu_type}, Nodes: {best.num_nodes}, GPUs: {best.num_gpus}")
-        if best.ep > 1:
-            print(f"    TP={best.tp}, PP={best.pp}, CP={best.cp}, EP={best.ep}, DP={best.dp}, DP/EP={best.dp_per_ep}")
-        else:
-            print(f"    TP={best.tp}, PP={best.pp}, CP={best.cp}, EP={best.ep}, DP={best.dp}")
+        parallelism_str = f"TP={best.tp}, CP={best.cp}, EP={best.ep}, PP={best.pp}, DP={best.dp}"
+        if best.vp > 1:
+            parallelism_str += f", VP={best.vp}"
+        if best.etp > 1:
+            parallelism_str += f", ETP={best.etp}"
+        if best.fsdp > 0:
+            parallelism_str += ", FSDP=ON"
+        print(f"    {parallelism_str}")
+        print(f"    MBS={best.micro_batch_size}, GBS={best.global_batch_size}")
 
 
 def main():
