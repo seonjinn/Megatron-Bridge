@@ -163,10 +163,12 @@ LLAMA3_70B_HIGHSEQ_RL_CONFIGS=()  # Disabled
 # Qwen3 30B A3B (MoE) - RL Training Config
 # ============================================================================
 # RL Config: 16 GPUs, 4 Nodes, T-GBS=512, SEQ=4096
-# Train parallelism (TP,CP,EP,PP,DP) = (1,1,8,1,2)
+# Train parallelism (TP,CP,EP,PP,DP) = (1,1,8,1,2) - MATCHES GRPO RL exactly
 # For MoE: world_size = TP×PP×CP×(EP×DP_per_EP) = 1×1×1×(8×2) = 16 GPUs ✓
-# Note: In Megatron, we set EP=8 and let DP be auto-calculated as 16
-#       DP_per_EP = DP/EP = 16/8 = 2 (matches table's DP=2)
+# Note: Memory optimizations applied to match GRPO RL:
+#       - empty_unused_memory_level=1 (clears unused GPU memory aggressively)
+#       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
+#       - bucket_size=40MB (gradient bucketing, GRPO default)
 QWEN3_30B_RL_CONFIGS=(
     # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
     "qwen3 30b_a3b 16 4096 1 1 1 8 1 1 0 1 512 bf16 pretrain default"
@@ -323,6 +325,11 @@ for i in "${!EXPERIMENTS[@]}"; do
     # Memory optimization: Match GRPO RL settings for fair comparison
     # empty_unused_memory_level=1 clears unused memory more aggressively (critical for RL scenarios)
     EXTRA_FLAGS="${EXTRA_FLAGS} ++train.empty_unused_memory_level=1"
+    
+    # bucket_size: Gradient bucketing size for DDP communication
+    # GRPO uses 40MB (40000000), Megatron-Bridge default is 128MB (134217728)
+    # Smaller bucket = better overlap but more communication overhead
+    EXTRA_FLAGS="${EXTRA_FLAGS} ++comm_overlap.bucket_size=40000000"
     
     # Sequence parallel for TP > 1 (required to avoid validation issues)
     if [[ $TP -gt 1 ]]; then
