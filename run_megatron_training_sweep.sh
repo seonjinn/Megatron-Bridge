@@ -100,15 +100,15 @@ mkdir -p "${SWEEP_DIR}"
 #       For training-only benchmarks, we use T-GBS. R-GBS is shown for reference.
 #
 # Parallelism verification:
-#   - qwen30b: For MoE, world_size = TP × PP × CP × DP × EP = 1×1×1×2×8 = 16 ✓
+#   - qwen30b: For MoE, world_size = TP × PP × CP × EP × DP = 1×1×1×8×2 = 16 ✓
 #   - llama8b: world_size = TP × PP × CP × DP = 1×1×1×8 = 8 ✓
 #   - llama70b: world_size = TP × PP × CP × DP = 4×2×1×2 = 16 ✓
 #
 # Train parallelism order: TP, CP, EP, PP, DP
 #
-# Note: For MoE models (qwen30b), the table's DP=2 means "data replicas per expert group"
-#       Actual DP = world_size / (TP * PP * CP) = 16
-#       With EP=8, each expert group has DP/EP = 2 data replicas
+# Note: For MoE models, EP is a separate parallelism dimension
+#       DP = world_size / (TP × PP × CP × EP)
+#       For qwen30b: DP = 16 / (1×1×1×8) = 2
 #
 # Format: "MODEL_NAME MODEL_SIZE NUM_GPUS SEQ_LEN TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG"
 # TAG is an optional identifier for special configs (e.g., "lowgbs", "highseq")
@@ -164,7 +164,8 @@ LLAMA3_70B_HIGHSEQ_RL_CONFIGS=()  # Disabled
 # ============================================================================
 # RL Config: 16 GPUs, 4 Nodes, T-GBS=512, SEQ=4096
 # Train parallelism (TP,CP,EP,PP,DP) = (1,1,8,1,2) - MATCHES GRPO RL exactly
-# For MoE: world_size = TP×PP×CP×(EP×DP_per_EP) = 1×1×1×(8×2) = 16 GPUs ✓
+# For MoE: world_size = TP×PP×CP×EP×DP = 1×1×1×8×2 = 16 GPUs ✓
+# Verification: DP = world_size / (TP×PP×CP×EP) = 16 / (1×1×1×8) = 2 ✓
 # Note: Memory optimizations applied to match GRPO RL:
 #       - empty_unused_memory_level=1 (clears unused GPU memory aggressively)
 #       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
@@ -285,11 +286,25 @@ for i in "${!EXPERIMENTS[@]}"; do
     
     # Calculate derived values
     NUM_NODES=$((NUM_GPUS / GPUS_PER_NODE))
-    DP=$((NUM_GPUS / (TP * PP * CP)))
     
-    # Validate EP divides DP for MoE models
-    if [[ $EP -gt 1 ]] && [[ $((DP % EP)) -ne 0 ]]; then
-        echo "  [WARNING] EP=$EP does not evenly divide DP=$DP. Skipping."
+    # Calculate DP based on model type
+    # For MoE models (EP > 1): world_size = TP × PP × CP × EP × DP
+    # For dense models: world_size = TP × PP × CP × DP
+    if [[ $EP -gt 1 ]]; then
+        # MoE model: DP = world_size / (TP × PP × CP × EP)
+        DP=$((NUM_GPUS / (TP * PP * CP * EP)))
+    else
+        # Dense model: DP = world_size / (TP × PP × CP)
+        DP=$((NUM_GPUS / (TP * PP * CP)))
+    fi
+    
+    # Validate parallelism configuration
+    EXPECTED_GPUS=$((TP * PP * CP * DP))
+    if [[ $EP -gt 1 ]]; then
+        EXPECTED_GPUS=$((TP * PP * CP * EP * DP))
+    fi
+    if [[ $EXPECTED_GPUS -ne $NUM_GPUS ]]; then
+        echo "  [WARNING] Parallelism mismatch: TP×PP×CP×EP×DP=${EXPECTED_GPUS} ≠ NUM_GPUS=${NUM_GPUS}. Skipping."
         continue
     fi
     
@@ -330,6 +345,9 @@ for i in "${!EXPERIMENTS[@]}"; do
     # GRPO uses 40MB (40000000), Megatron-Bridge default is 128MB (134217728)
     # Smaller bucket = better overlap but more communication overhead
     EXTRA_FLAGS="${EXTRA_FLAGS} ++comm_overlap.bucket_size=40000000"
+    
+    # Explicitly override micro_batch_size via Hydra (ensures it takes effect over base config)
+    EXTRA_FLAGS="${EXTRA_FLAGS} ++train.micro_batch_size=${MBS}"
     
     # Sequence parallel for TP > 1 (required to avoid validation issues)
     if [[ $TP -gt 1 ]]; then
