@@ -47,13 +47,17 @@ done
 # Common Settings for GB200
 # ============================================================================
 ACCOUNT="coreai_dlalgo_nemorl"
-PARTITION="batch"
-TIME_LIMIT="00:30:00"
+PARTITION="batch_long"
+TIME_LIMIT="08:00:00"
 CONTAINER="/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Megatron-Bridge/nemo_25.11.rc6.sqsh"
 
 # GB200 specific settings
 GPU_TYPE="gb200"
 GPUS_PER_NODE=4  # GB200 has 4 GPUs per node
+
+# Memory optimization: Match GRPO RL CUDA allocator settings
+# GRPO uses expandable_segments:False for memory management
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:False"
 
 # HuggingFace settings
 HF_TOKEN="${HF_TOKEN:-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}"
@@ -117,7 +121,7 @@ mkdir -p "${SWEEP_DIR}"
 # Verification: TP×PP×CP×DP = 1×1×1×8 = 8 GPUs ✓
 LLAMA3_8B_RL_CONFIGS=(
     # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 8b 8 4096 1 1 1 1 1 1 0 1 512 bf16 pretrain default"
+    "llama3 8b 8 8192 1 1 1 1 1 1 0 1 512 bf16 pretrain default"
 )
 
 # ============================================================================
@@ -128,7 +132,7 @@ LLAMA3_8B_RL_CONFIGS=(
 # Verification: TP×PP×CP×DP = 4×2×1×2 = 16 GPUs ✓
 LLAMA3_70B_RL_CONFIGS=(
     # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 70b 16 4096 4 2 1 1 1 1 0 1 512 bf16 pretrain default"
+    "llama3 70b 16 8192 4 2 1 1 1 1 0 1 512 bf16 pretrain default"
 )
 
 # ============================================================================
@@ -140,19 +144,20 @@ LLAMA3_70B_RL_CONFIGS=(
 # Verification: TP×PP×CP×DP = 4×2×1×2 = 16 GPUs ✓
 LLAMA3_70B_LOWGBS_RL_CONFIGS=(
     # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 70b 16 4096 4 2 1 1 1 1 0 1 512 bf16 pretrain lowgbs"
+    "llama3 70b 16 8192 4 2 1 1 1 1 0 1 512 bf16 pretrain lowgbs"
 )
 
 # ============================================================================
-# LLaMA3 70B High Sequence - RL Training Config
+# LLaMA3 70B High Sequence - DISABLED
 # ============================================================================
-# RL Config: 16 GPUs, 4 Nodes, T-GBS=512, SEQ=16384
-# Train parallelism (TP,CP,EP,PP,DP) = (4,1,1,2,2)
-# Verification: TP×PP×CP×DP = 4×2×1×2 = 16 GPUs ✓
-LLAMA3_70B_HIGHSEQ_RL_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 70b 16 16384 4 2 1 1 1 1 0 1 512 bf16 pretrain highseq"
-)
+# Note: Custom seq_length requires both model.seq_length and dataset.seq_length
+# to be overridden. Currently using workload_base_config defaults.
+# To enable, uncomment and ensure both overrides are properly applied.
+#
+# LLAMA3_70B_HIGHSEQ_RL_CONFIGS=(
+#     "llama3 70b 16 16384 4 2 1 1 1 1 0 1 512 bf16 pretrain highseq"
+# )
+LLAMA3_70B_HIGHSEQ_RL_CONFIGS=()  # Disabled
 
 # ============================================================================
 # Qwen3 30B A3B (MoE) - RL Training Config
@@ -207,7 +212,9 @@ else
             add_configs "${LLAMA3_8B_RL_CONFIGS[@]}"
             ;;
         llama70b|llama3_70b)
+            # Run both default and lowgbs variants for llama70b
             add_configs "${LLAMA3_70B_RL_CONFIGS[@]}"
+            add_configs "${LLAMA3_70B_LOWGBS_RL_CONFIGS[@]}"
             ;;
         llama70b_lowgbs|llama3_70b_lowgbs|llama70b-lowgbs)
             add_configs "${LLAMA3_70B_LOWGBS_RL_CONFIGS[@]}"
@@ -254,12 +261,13 @@ echo "RL Training Config Summary (BF16 only):"
 echo "┌───────────────────┬──────┬───────┬───────┬───────────────────────────┬───────┐"
 echo "│ Model             │ GPUs │ R-GBS │ T-GBS │ Train (TP,CP,EP,PP,DP)    │ SEQ   │"
 echo "├───────────────────┼──────┼───────┼───────┼───────────────────────────┼───────┤"
-echo "│ LLaMA3 8B         │    8 │  2048 │   512 │ 1,1,1,1,8                 │  4096 │"
-echo "│ LLaMA3 70B        │   16 │  2048 │   512 │ 4,1,1,2,2                 │  4096 │"
-echo "│ LLaMA3 70B lowgbs │   16 │   512 │   512 │ 4,1,1,2,2                 │  4096 │"
-echo "│ LLaMA3 70B HS     │   16 │  2048 │   512 │ 4,1,1,2,2                 │ 16384 │"
+echo "│ LLaMA3 8B         │    8 │  2048 │   512 │ 1,1,1,1,8                 │  8192 │"
+echo "│ LLaMA3 70B        │   16 │  2048 │   512 │ 4,1,1,2,2                 │  8192 │"
+echo "│ LLaMA3 70B lowgbs │   16 │   512 │   512 │ 4,1,1,2,2                 │  8192 │"
 echo "│ Qwen3 30B (MoE)   │   16 │  2048 │   512 │ 1,1,8,1,2 (DP_per_EP=2)   │  4096 │"
 echo "└───────────────────┴──────┴───────┴───────┴───────────────────────────┴───────┘"
+echo ""
+echo "Note: SEQ values are from workload_base_config defaults (not overridden)"
 echo ""
 
 # Write header to jobs file
@@ -312,6 +320,10 @@ for i in "${!EXPERIMENTS[@]}"; do
     # Build extra flags for hydra overrides
     EXTRA_FLAGS=""
     
+    # Memory optimization: Match GRPO RL settings for fair comparison
+    # empty_unused_memory_level=1 clears unused memory more aggressively (critical for RL scenarios)
+    EXTRA_FLAGS="${EXTRA_FLAGS} ++train.empty_unused_memory_level=1"
+    
     # Sequence parallel for TP > 1 (required to avoid validation issues)
     if [[ $TP -gt 1 ]]; then
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.sequence_parallel=True"
@@ -323,8 +335,11 @@ for i in "${!EXPERIMENTS[@]}"; do
         echo "  [INFO] Disabling CPU offloading (incompatible with PP=${PP})"
     fi
     
-    # Sequence length override
-    EXTRA_FLAGS="${EXTRA_FLAGS} ++data.seq_length=${SEQ_LEN}"
+    # Sequence length override - DISABLED: Use workload_base_config defaults
+    # Note: Changing seq_length requires matching model.seq_length and dataset.seq_length
+    # If you need custom seq_length, ensure both are set correctly
+    # EXTRA_FLAGS="${EXTRA_FLAGS} ++model.seq_length=${SEQ_LEN}"
+    # EXTRA_FLAGS="${EXTRA_FLAGS} ++dataset.seq_length=${SEQ_LEN}"
     
     # Precision handling
     case "$PRECISION" in
