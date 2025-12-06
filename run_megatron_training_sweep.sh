@@ -1,18 +1,17 @@
 #!/bin/bash
 #
+# Made by Seonjin Na Nov 2025.
 # RL Training Performance Sweep Runner
 # This script measures Megatron-Bridge training performance with RL training configurations.
 #
 # The goal is to measure training-only performance with parallelism settings
 # matching your RL training setup.
 #
-# Usage: ./run_rl_training_sweep.sh [--dry-run] [--model MODEL_NAME]
+# Usage: ./run_megatron_training_sweep.sh [--dry-run] [--model MODEL_NAME]
 #
 # Options:
 #   --dry-run       Print commands without executing
-#   --model NAME    Run only specific model (llama8b, llama70b, llama70b_highseq, qwen30b)
-#
-# Note: qwen32b is NOT available in Megatron-Bridge. Only qwen30b (Qwen3 30B A3B MoE) is supported.
+#   --model NAME    Run only specific model (llama8b, llama70b, qwen32b, qwen30b, qwen235b)
 #
 
 set -e
@@ -59,12 +58,23 @@ GPUS_PER_NODE=4  # GB200 has 4 GPUs per node
 # GRPO uses expandable_segments:False for memory management
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:False"
 
-# HuggingFace settings
-HF_TOKEN="${HF_TOKEN:-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}"
+# HuggingFace settings (read from environment variables - set in ~/.bashrc)
+if [[ -z "${HF_TOKEN}" ]]; then
+    echo "ERROR: HF_TOKEN environment variable is not set."
+    echo "Please add to your ~/.bashrc: export HF_TOKEN='your_token_here'"
+    exit 1
+fi
 HF_HOME="${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}"
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/cache}"
 
-WANDB_KEY="cd4db01aafd025d20369f8eee65e6292c28bfe0d"
+# WandB settings (read from environment variables - set in ~/.bashrc)
+# Note: WANDB_API_KEY is the standard env var name used by wandb
+if [[ -z "${WANDB_API_KEY}" ]]; then
+    echo "ERROR: WANDB_API_KEY environment variable is not set."
+    echo "Please add to your ~/.bashrc: export WANDB_API_KEY='your_key_here'"
+    exit 1
+fi
+WANDB_KEY="${WANDB_API_KEY}"
 WANDB_PROJECT="Megatron-Bridge-RL-Training"
 TENSORBOARD_DIR="./exp_logs/tensorboard"
 MAX_STEPS=100
@@ -85,7 +95,7 @@ mkdir -p "${SWEEP_DIR}"
 # ┌─────────────────┬──────┬───────┬───────┬───────┬────────┬─────────────────────────┐
 # │ Preset          │ GPUs │ Nodes │ R-GBS │ T-GBS │ SeqLen │ Train (TP,CP,EP,PP,DP)  │
 # ├─────────────────┼──────┼───────┼───────┼───────┼────────┼─────────────────────────┤
-# │ qwen32b         │   16 │     4 │  2048 │   512 │   4096 │ 4,1,1,1,4  (not avail)  │
+# │ qwen32b         │   16 │     4 │  2048 │   512 │   4096 │ 4,1,1,1,4               │
 # │ qwen30b         │   16 │     4 │  2048 │   512 │   4096 │ 1,1,8,1,2               │
 # │ llama8b         │    8 │     2 │  2048 │   512 │   4096 │ 1,1,1,1,8               │
 # │ llama70b        │   16 │     4 │  2048 │   512 │   4096 │ 4,1,1,2,2               │
@@ -99,19 +109,22 @@ mkdir -p "${SWEEP_DIR}"
 #       T-GBS = Training GBS (used in Megatron-Bridge training)
 #       For training-only benchmarks, we use T-GBS. R-GBS is shown for reference.
 #
-# Parallelism verification:
-#   - qwen30b: For MoE, world_size = TP × PP × CP × EP × DP = 1×1×1×8×2 = 16 ✓
-#   - llama8b: world_size = TP × PP × CP × DP = 1×1×1×8 = 8 ✓
-#   - llama70b: world_size = TP × PP × CP × DP = 4×2×1×2 = 16 ✓
+# Parallelism verification (Megatron-Bridge formula):
+#   world_size = TP × PP × CP × DP  (same for dense AND MoE models)
+#   DP = world_size / (TP × PP × CP)
 #
-# Train parallelism order: TP, CP, EP, PP, DP
+#   - llama8b:  DP = 8 / (1×1×1) = 8   → world_size = 1×1×1×8 = 8 ✓
+#   - llama70b: DP = 16 / (4×2×1) = 2  → world_size = 4×2×1×2 = 16 ✓
+#   - qwen32b:  DP = 16 / (4×1×1) = 4  → world_size = 4×1×1×4 = 16 ✓
+#   - qwen30b:  DP = 16 / (1×1×1) = 16 → world_size = 1×1×1×16 = 16 ✓
+#              EP=8 operates WITHIN DP (EP must divide DP: 16/8=2 replicas per expert)
 #
-# Note: For MoE models, EP is a separate parallelism dimension
-#       DP = world_size / (TP × PP × CP × EP)
-#       For qwen30b: DP = 16 / (1×1×1×8) = 2
+# Note: EP does NOT multiply world_size! EP partitions experts within the DP dimension.
+#       Reference: src/megatron/bridge/training/config.py::get_data_parallel_size()
 #
-# Format: "MODEL_NAME MODEL_SIZE NUM_GPUS SEQ_LEN TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG"
+# Format: "MODEL_NAME MODEL_SIZE NUM_GPUS TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG"
 # TAG is an optional identifier for special configs (e.g., "lowgbs", "highseq")
+# Note: SEQ_LEN removed - using workload_base_config defaults
 
 # ============================================================================
 # LLaMA3 8B - RL Training Config
@@ -120,8 +133,8 @@ mkdir -p "${SWEEP_DIR}"
 # Train parallelism (TP,CP,EP,PP,DP) = (1,1,1,1,8)
 # Verification: TP×PP×CP×DP = 1×1×1×8 = 8 GPUs ✓
 LLAMA3_8B_RL_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 8b 8 8192 1 1 1 1 1 1 0 1 512 bf16 pretrain default"
+    # MODEL SIZE GPUS TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
+    "llama3 8b 8 1 1 1 1 1 1 0 1 512 bf16 pretrain default"
 )
 
 # ============================================================================
@@ -131,21 +144,16 @@ LLAMA3_8B_RL_CONFIGS=(
 # Train parallelism (TP,CP,EP,PP,DP) = (4,1,1,2,2)
 # Verification: TP×PP×CP×DP = 4×2×1×2 = 16 GPUs ✓
 LLAMA3_70B_RL_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 70b 16 8192 4 2 1 1 1 1 0 1 512 bf16 pretrain default"
+    # MODEL SIZE GPUS TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
+    "llama3 70b 16 4 2 1 1 1 1 0 1 512 bf16 pretrain default"
 )
 
 # ============================================================================
-# LLaMA3 70B Low GBS - RL Training Config
+# LLaMA3 70B Low GBS - REMOVED (duplicate of default)
 # ============================================================================
-# RL Config: 16 GPUs, 4 Nodes, R-GBS=512, T-GBS=512, SEQ=4096
-# Train parallelism (TP,CP,EP,PP,DP) = (4,1,1,2,2)
-# Note: Same training config as llama70b, only R-GBS differs (for RL rollout)
-# Verification: TP×PP×CP×DP = 4×2×1×2 = 16 GPUs ✓
-LLAMA3_70B_LOWGBS_RL_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 70b 16 8192 4 2 1 1 1 1 0 1 512 bf16 pretrain lowgbs"
-)
+# Note: lowgbs config was identical to default for training (only R-GBS differs
+# which is for RL rollout, not training). Merged into LLAMA3_70B_RL_CONFIGS.
+LLAMA3_70B_LOWGBS_RL_CONFIGS=()  # Merged into default
 
 # ============================================================================
 # LLaMA3 70B High Sequence - DISABLED
@@ -163,32 +171,52 @@ LLAMA3_70B_HIGHSEQ_RL_CONFIGS=()  # Disabled
 # Qwen3 30B A3B (MoE) - RL Training Config
 # ============================================================================
 # RL Config: 16 GPUs, 4 Nodes, T-GBS=512, SEQ=4096
-# Train parallelism (TP,CP,EP,PP,DP) = (1,1,8,1,2) - MATCHES GRPO RL exactly
-# For MoE: world_size = TP×PP×CP×EP×DP = 1×1×1×8×2 = 16 GPUs ✓
-# Verification: DP = world_size / (TP×PP×CP×EP) = 16 / (1×1×1×8) = 2 ✓
-# Note: Memory optimizations applied to match GRPO RL:
+# Train parallelism: TP=1, PP=1, CP=1, EP=8
+#
+# Megatron-Bridge calculation:
+#   DP = world_size / (TP × PP × CP) = 16 / (1×1×1) = 16
+#   EP=8 partitions experts within DP (DP_per_EP = 16/8 = 2 replicas per expert)
+#
+# Note: GRPO RL reports (TP,CP,EP,PP,DP)=(1,1,8,1,2) where their "DP" = DP_per_EP
+#       Megatron-Bridge uses DP=16 (total data parallel), EP=8 (expert partitions)
+#
+# Memory optimizations applied to match GRPO RL:
 #       - empty_unused_memory_level=1 (clears unused GPU memory aggressively)
 #       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
 #       - bucket_size=40MB (gradient bucketing, GRPO default)
 QWEN3_30B_RL_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "qwen3 30b_a3b 16 4096 1 1 1 8 1 1 0 1 512 bf16 pretrain default"
+    # MODEL SIZE GPUS TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
+    "qwen3 30b_a3b 16 1 1 1 8 1 1 0 1 512 bf16 pretrain default"
 )
 
 # ============================================================================
-# Qwen 32B - NOT AVAILABLE in Megatron-Bridge
+# Qwen3 235B A22B (MoE) - Large Scale Config
 # ============================================================================
-# RL Config: 16 GPUs, 4 Nodes, T-GBS=512, SEQ=4096, Train=(TP=4,CP=1,EP=1,PP=2,DP=2)
-# Verification: 4 * 1 * 2 * 2 = 16 GPUs ✓
+# Config: 64 GPUs, 16 Nodes, GBS=1024, SEQ=4096
+# Parallelism: TP=1, PP=8, CP=1, EP=8
 #
-# WARNING: Qwen 32B (dense model) is NOT available in Megatron-Bridge.
-# Only Qwen3 30B A3B (MoE) and Qwen3 235B A22B (MoE) are supported.
-# If you need Qwen 32B, you'll need to add the model config to Megatron-Bridge.
+# Megatron-Bridge calculation:
+#   DP = world_size / (TP × PP × CP) = 64 / (1×8×1) = 8
+#   EP=8 partitions experts within DP (DP_per_EP = 8/8 = 1 replica per expert)
+QWEN3_235B_CONFIGS=(
+    # MODEL SIZE GPUS TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
+    "qwen3 235b_a22b 64 1 8 1 8 1 1 0 1 1024 bf16 pretrain default"
+    "qwen3 235b_a22b 64 1 8 1 8 1 1 0 1 1024 fp8_mx pretrain default"
+)
+
+
+# ============================================================================
+# Qwen3 32B (Dense) - RL Training Config
+# ============================================================================
+# RL Config: 16 GPUs, 4 Nodes, T-GBS=512, SEQ=4096
+# Train parallelism (TP,CP,EP,PP,DP) = (4,1,1,1,4)
+# Verification: TP×PP×CP×DP = 4×1×1×4 = 16 GPUs ✓
 #
-# QWEN_32B_RL_CONFIGS=(
-#     # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK
-#     "qwen 32b 16 4096 4 2 1 1 1 1 0 1 512 bf16 pretrain"
-# )
+# Note: This is a dense model (not MoE), so EP=1
+QWEN3_32B_RL_CONFIGS=(
+    # MODEL SIZE GPUS TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
+    "qwen3 32b 16 4 1 1 1 1 1 0 2 512 bf16 pretrain default"
+)
 
 # ============================================================================
 # Build Experiment List Based on Filter
@@ -206,32 +234,40 @@ if [[ -z "$FILTER_MODEL" ]]; then
     # Run all RL training configs
     add_configs "${LLAMA3_8B_RL_CONFIGS[@]}"
     add_configs "${LLAMA3_70B_RL_CONFIGS[@]}"
-    add_configs "${LLAMA3_70B_LOWGBS_RL_CONFIGS[@]}"
-    add_configs "${LLAMA3_70B_HIGHSEQ_RL_CONFIGS[@]}"
+    add_configs "${LLAMA3_70B_HIGHSEQ_RL_CONFIGS[@]}"  # Currently disabled
+    add_configs "${QWEN3_32B_RL_CONFIGS[@]}"
     add_configs "${QWEN3_30B_RL_CONFIGS[@]}"
+    add_configs "${QWEN3_235B_CONFIGS[@]}"  # 64 GPUs required
 else
     case "$FILTER_MODEL" in
         llama8b|llama3_8b)
             add_configs "${LLAMA3_8B_RL_CONFIGS[@]}"
             ;;
-        llama70b|llama3_70b)
-            # Run both default and lowgbs variants for llama70b
+        llama70b|llama3_70b|llama70b_lowgbs|llama3_70b_lowgbs|llama70b-lowgbs)
+            # lowgbs merged into default (same training config, only R-GBS differs for RL rollout)
             add_configs "${LLAMA3_70B_RL_CONFIGS[@]}"
-            add_configs "${LLAMA3_70B_LOWGBS_RL_CONFIGS[@]}"
-            ;;
-        llama70b_lowgbs|llama3_70b_lowgbs|llama70b-lowgbs)
-            add_configs "${LLAMA3_70B_LOWGBS_RL_CONFIGS[@]}"
             ;;
         llama70b_highseq|llama3_70b_highseq|llama70b-highseq)
             add_configs "${LLAMA3_70B_HIGHSEQ_RL_CONFIGS[@]}"
             ;;
+        qwen32b|qwen3_32b)
+            add_configs "${QWEN3_32B_RL_CONFIGS[@]}"
+            ;;
         qwen30b|qwen3_30b)
             add_configs "${QWEN3_30B_RL_CONFIGS[@]}"
             ;;
+        qwen235b|qwen3_235b)
+            add_configs "${QWEN3_235B_CONFIGS[@]}"
+            ;;
+        all_qwen)
+            # All Qwen3 variants (dense + MoE)
+            add_configs "${QWEN3_32B_RL_CONFIGS[@]}"
+            add_configs "${QWEN3_30B_RL_CONFIGS[@]}"
+            add_configs "${QWEN3_235B_CONFIGS[@]}"
+            ;;
         all_llama70b)
-            # All LLaMA 70B variants (normal, lowgbs, highseq)
+            # All LLaMA 70B variants (default + highseq if enabled)
             add_configs "${LLAMA3_70B_RL_CONFIGS[@]}"
-            add_configs "${LLAMA3_70B_LOWGBS_RL_CONFIGS[@]}"
             add_configs "${LLAMA3_70B_HIGHSEQ_RL_CONFIGS[@]}"
             ;;
         *)
@@ -239,12 +275,12 @@ else
             echo "Available models:"
             echo "  llama8b (LLaMA3 8B)"
             echo "  llama70b (LLaMA3 70B)"
-            echo "  llama70b_lowgbs (LLaMA3 70B with low R-GBS=512)"
-            echo "  llama70b_highseq (LLaMA3 70B with SEQ=16384)"
+            echo "  llama70b_highseq (LLaMA3 70B with SEQ=16384) [disabled]"
+            echo "  qwen32b (Qwen3 32B Dense)"
             echo "  qwen30b (Qwen3 30B A3B MoE)"
+            echo "  qwen235b (Qwen3 235B A22B MoE - 64 GPUs)"
+            echo "  all_qwen (all Qwen3 variants)"
             echo "  all_llama70b (all llama70b variants)"
-            echo ""
-            echo "Note: qwen32b is NOT available in Megatron-Bridge"
             exit 1
             ;;
     esac
@@ -261,55 +297,58 @@ echo "Total experiments: ${#EXPERIMENTS[@]}"
 echo "============================================"
 echo ""
 echo "RL Training Config Summary (BF16 only):"
-echo "┌───────────────────┬──────┬───────┬───────┬───────────────────────────┬───────┐"
-echo "│ Model             │ GPUs │ R-GBS │ T-GBS │ Train (TP,CP,EP,PP,DP)    │ SEQ   │"
-echo "├───────────────────┼──────┼───────┼───────┼───────────────────────────┼───────┤"
-echo "│ LLaMA3 8B         │    8 │  2048 │   512 │ 1,1,1,1,8                 │  8192 │"
-echo "│ LLaMA3 70B        │   16 │  2048 │   512 │ 4,1,1,2,2                 │  8192 │"
-echo "│ LLaMA3 70B lowgbs │   16 │   512 │   512 │ 4,1,1,2,2                 │  8192 │"
-echo "│ Qwen3 30B (MoE)   │   16 │  2048 │   512 │ 1,1,8,1,2 (DP_per_EP=2)   │  4096 │"
-echo "└───────────────────┴──────┴───────┴───────┴───────────────────────────┴───────┘"
+echo "┌───────────────────┬──────┬───────┬──────────────────────────────────┐"
+echo "│ Model             │ GPUs │ T-GBS │ Parallelism (TP,PP,CP,DP) [EP]   │"
+echo "├───────────────────┼──────┼───────┼──────────────────────────────────┤"
+echo "│ LLaMA3 8B         │    8 │   512 │ 1,1,1,8                          │"
+echo "│ LLaMA3 70B        │   16 │   512 │ 4,2,1,2                          │"
+echo "│ Qwen3 32B (Dense) │   16 │   512 │ 4,1,1,4                          │"
+echo "│ Qwen3 30B (MoE)   │   16 │   512 │ 1,1,1,16 [EP=8, DP/EP=2]         │"
+echo "│ Qwen3 235B (MoE)  │   64 │  1024 │ 1,8,1,8 [EP=8, DP/EP=1]          │"
+echo "└───────────────────┴──────┴───────┴──────────────────────────────────┘"
 echo ""
-echo "Note: SEQ values are from workload_base_config defaults (not overridden)"
+echo "Note: DP = world_size / (TP × PP × CP). EP partitions experts within DP."
+echo "      SEQ values use workload_base_config defaults"
 echo ""
 
 # Write header to jobs file
 cat > "${JOBS_FILE}" << EOF
 # Sweep: ${SWEEP_ID}
 # RL Training Performance Sweep
-# Format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+# Format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|MBS|GBS|PRECISION|TASK|EXP_DIR
 EOF
 
 for i in "${!EXPERIMENTS[@]}"; do
     exp="${EXPERIMENTS[$i]}"
-    read -r MODEL_NAME MODEL_SIZE NUM_GPUS SEQ_LEN TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG <<< "$exp"
+    read -r MODEL_NAME MODEL_SIZE NUM_GPUS TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG <<< "$exp"
     
     # Calculate derived values
     NUM_NODES=$((NUM_GPUS / GPUS_PER_NODE))
     
-    # Calculate DP based on model type
-    # For MoE models (EP > 1): world_size = TP × PP × CP × EP × DP
-    # For dense models: world_size = TP × PP × CP × DP
-    if [[ $EP -gt 1 ]]; then
-        # MoE model: DP = world_size / (TP × PP × CP × EP)
-        DP=$((NUM_GPUS / (TP * PP * CP * EP)))
-    else
-        # Dense model: DP = world_size / (TP × PP × CP)
-        DP=$((NUM_GPUS / (TP * PP * CP)))
-    fi
+    # Calculate DP (Data Parallel size)
+    # Megatron-Bridge formula: world_size = TP × PP × CP × DP
+    # Note: EP operates WITHIN the DP dimension (EP divides DP), not as a separate multiplier
+    # Reference: src/megatron/bridge/training/config.py::get_data_parallel_size()
+    DP=$((NUM_GPUS / (TP * PP * CP)))
     
     # Validate parallelism configuration
     EXPECTED_GPUS=$((TP * PP * CP * DP))
-    if [[ $EP -gt 1 ]]; then
-        EXPECTED_GPUS=$((TP * PP * CP * EP * DP))
-    fi
     if [[ $EXPECTED_GPUS -ne $NUM_GPUS ]]; then
-        echo "  [WARNING] Parallelism mismatch: TP×PP×CP×EP×DP=${EXPECTED_GPUS} ≠ NUM_GPUS=${NUM_GPUS}. Skipping."
+        echo "  [WARNING] Parallelism mismatch: TP×PP×CP×DP=${EXPECTED_GPUS} ≠ NUM_GPUS=${NUM_GPUS}. Skipping."
         continue
     fi
     
+    # For MoE models: validate that EP divides DP evenly
+    if [[ $EP -gt 1 ]]; then
+        if [[ $((DP % EP)) -ne 0 ]]; then
+            echo "  [WARNING] EP=${EP} must divide DP=${DP} evenly for MoE. Skipping."
+            continue
+        fi
+        echo "  [INFO] MoE model: EP=${EP} partitions DP=${DP} (DP_per_EP=$((DP / EP)))"
+    fi
+    
     # Construct experiment name with unique identifier
-    EXP_NAME="rl_${MODEL_NAME}_${MODEL_SIZE}_${PRECISION}_tp${TP}pp${PP}cp${CP}ep${EP}dp${DP}_gbs${GBS}_seq${SEQ_LEN}"
+    EXP_NAME="rl_${MODEL_NAME}_${MODEL_SIZE}_${PRECISION}_tp${TP}pp${PP}cp${CP}ep${EP}dp${DP}_gbs${GBS}"
     
     # Add tag suffix for special configs (e.g., lowgbs, highseq)
     if [[ "$TAG" != "default" ]]; then
@@ -317,7 +356,7 @@ for i in "${!EXPERIMENTS[@]}"; do
     fi
     
     echo "[$((i+1))/${#EXPERIMENTS[@]}] Submitting: ${EXP_NAME}"
-    echo "  Config: ${NUM_GPUS} GPUs (${NUM_NODES} nodes), SEQ=${SEQ_LEN}, GBS=${GBS}"
+    echo "  Config: ${NUM_GPUS} GPUs (${NUM_NODES} nodes), GBS=${GBS}"
     echo "  Parallelism: TP=${TP}, PP=${PP}, CP=${CP}, EP=${EP}, DP=${DP}, VP=${VP}"
     echo "  Precision: ${PRECISION}"
     
@@ -449,11 +488,13 @@ for i in "${!EXPERIMENTS[@]}"; do
     fi
     
     if [[ "$EXP_DIR" == "unknown" ]]; then
-        EXP_DIR=$(ls -td ./exp_logs/experiments/${MODEL_NAME}_${MODEL_SIZE}_*/  2>/dev/null | head -1 || echo "unknown")
+        # Use full experiment name pattern: MODEL_NAME_MODEL_SIZE_llm_TASK_PRECISION
+        EXP_PATTERN="${MODEL_NAME}_${MODEL_SIZE}_llm_${TASK}_${PRECISION}"
+        EXP_DIR=$(ls -td ./exp_logs/experiments/${EXP_PATTERN}/${EXP_PATTERN}_*/  2>/dev/null | head -1 || echo "unknown")
     fi
     
     # Record job info with extended format
-    echo "${JOB_ID}|${MODEL_NAME}|${MODEL_SIZE}|${NUM_GPUS}|${NUM_NODES}|${GPU_TYPE}|${TP}|${PP}|${CP}|${EP}|${DP}|${VP}|${ETP}|${FSDP}|${SEQ_LEN}|${MBS}|${GBS}|${PRECISION}|${TASK}|${EXP_DIR}" >> "${JOBS_FILE}"
+    echo "${JOB_ID}|${MODEL_NAME}|${MODEL_SIZE}|${NUM_GPUS}|${NUM_NODES}|${GPU_TYPE}|${TP}|${PP}|${CP}|${EP}|${DP}|${VP}|${ETP}|${FSDP}|${MBS}|${GBS}|${PRECISION}|${TASK}|${EXP_DIR}" >> "${JOBS_FILE}"
     
     echo "  Submitted: Job ID = ${JOB_ID}"
     echo "  Exp Dir: ${EXP_DIR}"
