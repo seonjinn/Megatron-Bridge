@@ -342,7 +342,7 @@ for i in "${!EXPERIMENTS[@]}"; do
             echo "  [INFO] Qwen30B MoE: Using CUDA graph scope [moe_router,moe_preprocess,attn]"
             # MoE models need transformer_engine cuda graph with specific scope
             HYDRA_FLAGS="${HYDRA_FLAGS} ++model.cuda_graph_impl=transformer_engine"
-            HYDRA_FLAGS="${HYDRA_FLAGS} '++model.cuda_graph_scope=[moe_router,moe_preprocess,attn]'"
+            HYDRA_FLAGS="${HYDRA_FLAGS} ++model.cuda_graph_scope=\\[moe_router,moe_preprocess,attn\\]"
         fi
     fi
     
