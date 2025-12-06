@@ -12,6 +12,9 @@
 
 set -e
 
+# Get script directory for finding config files
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ============================================================================
 # Parse Arguments
 # ============================================================================
@@ -42,6 +45,8 @@ done
 # Common Settings for GB200
 # ============================================================================
 ACCOUNT="coreai_dlalgo_nemorl"
+# ACCOUNT="coreai_dlalgo_llm"
+
 PARTITION="batch_long"
 TIME_LIMIT="08:00:00"
 CONTAINER="/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/Megatron-Bridge/nemo_25.11.rc6.sqsh"
@@ -73,80 +78,50 @@ mkdir -p "${SWEEP_DIR}"
 # ============================================================================
 # NeMo 25.07 Reference Configurations
 # ============================================================================
-# Format: "MODEL_NAME MODEL_SIZE NUM_GPUS SEQ_LEN TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG"
+# Configs are loaded from: gb200_reference_configs.yaml
+# This is the single source of truth used by both:
+#   - This sweep script (job launching)
+#   - collect_results.py (result filtering and comparison)
 #
-# Note: These configs match the official NeMo 25.07 reference table exactly
+# Format: "MODEL_NAME MODEL_SIZE NUM_GPUS SEQ_LEN TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG"
 
-# ============================================================================
-# LLAMA3 8B - NeMo 25.07 Reference
-# ============================================================================
-# Config: 8 GPUs, SEQ=8192, TP=1, PP=1, CP=1, DP=8
-# FSDP=0, recompute=0, cpu_offload=0, MBS=2, GBS=128, CG=1
-LLAMA3_8B_2507_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 8b 8 8192 1 1 1 1 1 1 0 2 128 bf16 pretrain nemo2507"
-)
+CONFIG_FILE="${SCRIPT_DIR}/gb200_reference_configs.yaml"
+CONFIG_SECTION="pretrain_bf16"  # Default section
 
-# ============================================================================
-# LLAMA3 70B - NeMo 25.07 Reference
-# ============================================================================
-# Config: 64 GPUs, SEQ=8192, TP=1, PP=1, CP=1, DP=64
-# FSDP=1, recompute=20, cpu_offload=0, MBS=1, GBS=128, CG=0
-LLAMA3_70B_2507_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama3 70b 64 8192 1 1 1 1 1 1 1 1 128 bf16 pretrain nemo2507"
-)
+# Check if config file exists
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+    echo "Error: Config file not found: ${CONFIG_FILE}"
+    echo "Please ensure gb200_reference_configs.yaml exists in the same directory."
+    exit 1
+fi
 
-# ============================================================================
-# LLAMA3.1 405B - NeMo 25.07 Reference
-# ============================================================================
-# Config: 128 GPUs, SEQ=8192, TP=4, PP=8, CP=2, DP=2, VP=8
-# FSDP=0, recompute=0, cpu_offload=0, MBS=1, GBS=64, CG=0
-LLAMA31_405B_2507_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "llama31 405b 128 8192 4 8 2 1 8 1 0 1 64 bf16 pretrain nemo2507"
-)
+# Function to load configs from YAML
+load_configs_from_yaml() {
+    local section="$1"
+    local model_filter="$2"
+    
+    if [[ -n "$model_filter" ]]; then
+        python3 scripts/parse_reference_config.py \
+            --config "${CONFIG_FILE}" \
+            --section "${section}" \
+            --model "${model_filter}" \
+            --format sweep 2>/dev/null
+    else
+        python3 scripts/parse_reference_config.py \
+            --config "${CONFIG_FILE}" \
+            --section "${section}" \
+            --all \
+            --format sweep 2>/dev/null
+    fi
+}
 
-# ============================================================================
-# DeepSeekV3 - NeMo 25.07 Reference (Large GBS)
-# ============================================================================
-# Config: 256 GPUs, SEQ=4096, TP=2, PP=4, CP=1, DP=32, EP=64, VP=1
-# FSDP=0, recompute=0, cpu_offload=0, MBS=1, GBS=2048, CG=1
-DEEPSEEK_V3_LARGE_GBS_2507_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "deepseek v3 256 4096 2 4 1 64 1 1 0 1 2048 bf16 pretrain nemo2507_gbs2048"
-)
-
-# ============================================================================
-# DeepSeekV3 - Small GBS (NOT in GB200 Reference - REMOVED)
-# ============================================================================
-# NOTE: This config is NOT in the official GB200 reference table.
-# The reference only has GBS=2048 for 256 GPUs.
-# Commenting out to match reference exactly.
-# DEEPSEEK_V3_SMALL_GBS_2507_CONFIGS=(
-#     # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-#     "deepseek v3 256 4096 2 4 1 64 1 1 0 1 128 bf16 pretrain nemo2507_gbs128"
-# )
-
-# ============================================================================
-# Qwen3 30B A3B - NeMo 25.07 Reference
-# ============================================================================
-# Config: 8 GPUs, SEQ=4096, TP=1, PP=1, CP=1, DP=8, EP=8, VP=1
-# FSDP=0, recompute=0, cpu_offload=0, MBS=1, GBS=512, CG=1
-QWEN3_30B_2507_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "qwen3 30b_a3b 8 4096 1 1 1 8 1 1 0 1 512 bf16 pretrain nemo2507"
-)
-
-# ============================================================================
-# Qwen3 235B A22B - NeMo 25.07 Reference
-# ============================================================================
-# Config: 64 GPUs, SEQ=4096, TP=2, PP=1, CP=1, DP=32, EP=64, VP=1
-# FSDP=0, recompute=0, cpu_offload=0, MBS=1, GBS=1024, CG=1
-QWEN3_235B_2507_CONFIGS=(
-    # MODEL SIZE GPUS SEQ TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG
-    "qwen3 235b_a22b 64 4096 2 1 1 64 1 1 0 1 1024 bf16 pretrain nemo2507"
-)
+# Load all pretrain_bf16 configs into arrays
+mapfile -t LLAMA3_8B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "llama3_8b")
+mapfile -t LLAMA3_70B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "llama3_70b")
+mapfile -t LLAMA31_405B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "llama31_405b")
+mapfile -t DEEPSEEK_V3_LARGE_GBS_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "deepseek_v3")
+mapfile -t QWEN3_30B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "qwen3_30b")
+mapfile -t QWEN3_235B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "qwen3_235b")
 
 # ============================================================================
 # Build Experiment List Based on Filter
@@ -405,8 +380,21 @@ echo "============================================"
 echo "All experiments submitted!"
 echo "Jobs file: ${JOBS_FILE}"
 echo ""
+echo "Config file: ${CONFIG_FILE}"
+echo ""
 echo "To collect and compare results with NeMo 25.07 reference:"
-echo "  python3 collect_results.py --sweep-dir ${SWEEP_DIR} --match-config reference_configs_2507.json"
+echo ""
+echo "  # List available configs"
+echo "  python3 collect_results.py --match-config gb200_reference_configs.yaml --list-configs"
+echo ""
+echo "  # Scan all experiments and match against reference configs"
+echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --use-reference"
+echo ""
+echo "  # Filter for specific model"
+echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model llama3_8b --use-reference"
+echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model llama3_70b --use-reference"
+echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model deepseek_v3 --use-reference"
+echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model qwen3_30b --use-reference"
 echo ""
 echo "Expected metrics to validate:"
 echo "  - Tokens/sec/GPU"
