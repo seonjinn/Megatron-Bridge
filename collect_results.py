@@ -31,6 +31,7 @@ Metric Calculation Options:
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -43,6 +44,15 @@ try:
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
+
+try:
+    from rich.console import Console
+    from rich.text import Text
+    RICH_AVAILABLE = True
+    rich_console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    rich_console = None
 
 
 @dataclass
@@ -82,6 +92,7 @@ class ExperimentResult:
     max_steps: int = 0
     precision: str = ""
     task: str = ""  # pretrain, sft, lora, etc.
+    token_drop: bool = False  # MoE token drop enabled
     
     # Performance metrics (averaged over stable iterations)
     tokens_per_sec_per_gpu: float = 0.0
@@ -518,8 +529,12 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
         'sequence_length': re.compile(r'(?:seq_length|sequence_length)[=:\s]+(\d+)'),
     }
     
-    # Boolean patterns (FSDP)
+    # Boolean patterns (FSDP, token drop)
     fsdp_pattern = re.compile(r'use_megatron_fsdp[=:\s]+(True|true|1)')
+    # Token drop is enabled when moe_expert_capacity_factor is a positive number (not null/None)
+    # moe_expert_capacity_factor: 1.0 means token drop is enabled
+    # moe_expert_capacity_factor: null means dropless mode
+    token_drop_capacity_pattern = re.compile(r'moe_expert_capacity_factor[=:\s]+(\d+\.?\d*)')
     
     # Additional patterns to try for num_gpus (world_size)
     num_gpus_patterns = [
@@ -559,6 +574,16 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
             # Parse FSDP (boolean)
             if fsdp_pattern.search(content):
                 result.fsdp = 1
+            
+            # Parse token drop - for MoE models
+            # Token drop is enabled when moe_expert_capacity_factor is a positive number
+            token_drop_match = token_drop_capacity_pattern.search(content)
+            if token_drop_match:
+                try:
+                    capacity_factor = float(token_drop_match.group(1))
+                    result.token_drop = capacity_factor > 0
+                except ValueError:
+                    pass
             
             # Try additional patterns for num_gpus if not found
             if result.num_gpus == 0:
@@ -1167,22 +1192,26 @@ def print_summary_table(results: list[ExperimentResult]):
     COL_PARA = 3    # TP, PP, CP, DP, EP, VP, ETP
     COL_BATCH = 5  # MBS, GBS
     COL_METRIC = 10
+    COL_METRIC_WIDE = 12  # For larger numbers like Tokens/sec
     # Directory column - no fixed width, will be appended at the end
     
-    # Check if any experiment has VP > 1 or ETP > 1
+    # Check if any experiment has VP > 1 or ETP > 1 or token_drop
     has_vp = any(r.vp > 1 for r in results)
     has_etp = any(r.etp > 1 for r in results)
     has_fsdp = any(r.fsdp > 0 for r in results)
+    has_moe = any(r.ep > 1 for r in results)  # Show token drop column for MoE models
     
     # Calculate total width (without directory column - it will extend beyond)
-    # Base: Model + Task + Prec + Status + Iters + GPU + N + #GPU + TP + PP + CP + DP + EP + MBS + GBS + 3 metrics
+    # Base: Model + Task + Prec + Status + Iters + GPU + N + #GPU + TP + PP + CP + DP + EP + MBS + GBS + 6 metrics
     total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_ITERS + COL_GPU + COL_NODES + COL_GPUS
     total_width += COL_FSDP if has_fsdp else 0
     total_width += (COL_PARA * 5)  # TP, PP, CP, DP, EP
     total_width += COL_PARA if has_vp else 0  # VP
     total_width += COL_PARA if has_etp else 0  # ETP
+    total_width += COL_PARA if has_moe else 0  # TD (Token Drop)
     total_width += (COL_BATCH * 2)  # MBS, GBS
-    total_width += (COL_METRIC * 3) + 2  # metrics + spacing
+    # Metrics: Step(s) + TF/GPU + MFU% + Seq/s + Tok/s + Tok/s/GPU
+    total_width += COL_METRIC + COL_METRIC + COL_METRIC + COL_METRIC + COL_METRIC_WIDE + COL_METRIC_WIDE + 2
     
     # Build header dynamically
     # Order: FSDP → TP → CP → EP → PP → DP → VP → ETP → MBS → GBS
@@ -1195,8 +1224,12 @@ def print_summary_table(results: list[ExperimentResult]):
         header += f"{'VP':>{COL_PARA}}"
     if has_etp:
         header += f"{'ET':>{COL_PARA}}"  # ETP shortened to ET
+    if has_moe:
+        header += f"{'TD':>{COL_PARA}}"  # Token Drop (Y/N for MoE models)
     header += f"{'MBS':>{COL_BATCH}}{'GBS':>{COL_BATCH}}"
-    header += f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}"
+    # Metrics order: Step Time(sec), Per GPU TF, MFU%, Seq/sec, Tokens/sec, Tokens/sec/GPU
+    header += f"{'Step(s)':>{COL_METRIC}}{'TF/GPU':>{COL_METRIC}}{'MFU%':>{COL_METRIC}}{'Seq/s':>{COL_METRIC}}"
+    header += f"{'Tok/s':>{COL_METRIC_WIDE}}{'Tok/s/GPU':>{COL_METRIC_WIDE}}"
     # Removed Exp Directory from header - will show log path below each row
     
     # Group results by model (model_name + model_size, avoiding duplicates)
@@ -1286,9 +1319,17 @@ def print_summary_table(results: list[ExperimentResult]):
                 row += f"{r.vp:>{COL_PARA}}"
             if has_etp:
                 row += f"{r.etp:>{COL_PARA}}"
+            if has_moe:
+                td_str = "Y" if r.token_drop else "N"
+                row += f"{td_str:>{COL_PARA}}"
             row += f"{r.micro_batch_size:>{COL_BATCH}}{r.global_batch_size:>{COL_BATCH}}"
-            row += f"{r.tokens_per_sec_per_gpu:>{COL_METRIC}.1f}{r.tflops_per_gpu:>{COL_METRIC}.1f}"
-            row += f"{r.iteration_time_ms:>{COL_METRIC}.1f}"
+            # Metrics order: Step Time(sec), Per GPU TF, MFU%, Seq/sec, Tokens/sec, Tokens/sec/GPU
+            step_time_sec = r.iteration_time_ms / 1000.0 if r.iteration_time_ms > 0 else 0.0
+            # MFU% = TF/GPU * 2 / (4.9 * 1000) * 100 = TF/GPU / 24.5
+            # GB200 peak: 4.9 PFLOP/s = 4900 TFLOP/s, factor of 2 for BF16
+            mfu_percent = (r.tflops_per_gpu * 2 / 4900) * 100 if r.tflops_per_gpu > 0 else 0.0
+            row += f"{step_time_sec:>{COL_METRIC}.2f}{r.tflops_per_gpu:>{COL_METRIC}.1f}{mfu_percent:>{COL_METRIC}.1f}{r.samples_per_sec:>{COL_METRIC}.1f}"
+            row += f"{r.tokens_per_sec_total:>{COL_METRIC_WIDE}.0f}{r.tokens_per_sec_per_gpu:>{COL_METRIC_WIDE}.0f}"
             
             # Apply color to status only (replace status in the row)
             status_start = COL_MODEL + COL_TASK + COL_PREC
@@ -1300,10 +1341,27 @@ def print_summary_table(results: list[ExperimentResult]):
             
             print(row)
             
-            # Print log file path below in gray (clickable in terminal)
+            # Print log file path below (clickable in terminal)
             log_path = r.log_file_path if r.log_file_path else (str(Path(r.exp_dir) / "log-*.out") if r.exp_dir else "")
             if log_path:
-                print(f"{GRAY}  └─ {log_path}{RESET}")
+                try:
+                    abs_path = os.path.abspath(log_path)
+                    
+                    # Create short display path
+                    if 'exp_logs' in abs_path:
+                        idx = abs_path.find('exp_logs')
+                        short_path = abs_path[idx:]
+                    else:
+                        short_path = os.path.relpath(log_path)
+                    
+                    # Use rich for clickable hyperlink if available
+                    if RICH_AVAILABLE and rich_console:
+                        uri = Path(abs_path).as_uri()
+                        rich_console.print(f"  └─ [link={uri}]{short_path}[/link]", style="dim", soft_wrap=True, overflow="ignore")
+                    else:
+                        print(f"{GRAY}  └─ {short_path}{RESET}")
+                except Exception:
+                    print(f"{GRAY}  └─ {log_path}{RESET}")
     
     print("=" * total_width)
     
