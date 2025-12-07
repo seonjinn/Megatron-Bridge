@@ -66,7 +66,7 @@ HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/cache}"
 WANDB_KEY="cd4db01aafd025d20369f8eee65e6292c28bfe0d"
 WANDB_PROJECT="Megatron-Bridge-NeMo2507-Validation"
 TENSORBOARD_DIR="./exp_logs/tensorboard"
-MAX_STEPS=100
+MAX_STEPS=50  # NeMo 25.07 reference: 50 steps, average steps 35-50 (to match Malay's metric calculation)
 
 # Results tracking
 SWEEP_ID="nemo2507_validation_$(date +%Y%m%d_%H%M%S)"
@@ -162,6 +162,27 @@ else
         qwen3_30b|qwen30b)
             add_configs "${QWEN3_30B_2507_CONFIGS[@]}"
             ;;
+        qwen3_30b_tokendrop|qwen30b_tokendrop)
+            # Qwen3-30B with token drop enabled
+            for config in "${QWEN3_30B_2507_CONFIGS[@]}"; do
+                EXPERIMENTS+=("${config} TOKENDROP")
+            done
+            ;;
+        qwen3_30b_tokendrop_mbs4|qwen30b_tokendrop_mbs4)
+            # Qwen3-30B with token drop enabled + MBS=4
+            for config in "${QWEN3_30B_2507_CONFIGS[@]}"; do
+                # Override MBS to 4 (12th field in the config)
+                modified_config=$(echo "$config" | awk '{$12=4; print}')
+                EXPERIMENTS+=("${modified_config} TOKENDROP")
+            done
+            ;;
+        qwen3_30b_both|qwen30b_both)
+            # Qwen3-30B with both dropless and token drop
+            add_configs "${QWEN3_30B_2507_CONFIGS[@]}"
+            for config in "${QWEN3_30B_2507_CONFIGS[@]}"; do
+                EXPERIMENTS+=("${config} TOKENDROP")
+            done
+            ;;
         qwen3_235b|qwen235b)
             add_configs "${QWEN3_235B_2507_CONFIGS[@]}"
             ;;
@@ -179,7 +200,8 @@ else
             echo "Available models:"
             echo "  llama3_8b, llama3_70b, llama31_405b"
             echo "  deepseek_v3 (GBS=2048 only, matching GB200 reference)"
-            echo "  qwen3_30b, qwen3_235b"
+            echo "  qwen3_30b (dropless), qwen3_30b_tokendrop, qwen3_30b_tokendrop_mbs4, qwen3_30b_both"
+            echo "  qwen3_235b"
             echo "  all_qwen, all_llama"
             exit 1
             ;;
@@ -209,6 +231,14 @@ EOF
 
 for i in "${!EXPERIMENTS[@]}"; do
     exp="${EXPERIMENTS[$i]}"
+    
+    # Parse config - check if TOKENDROP flag is present at the end
+    USE_TOKENDROP="False"
+    if [[ "$exp" == *" TOKENDROP" ]]; then
+        USE_TOKENDROP="True"
+        exp="${exp% TOKENDROP}"  # Remove TOKENDROP suffix
+    fi
+    
     read -r MODEL_NAME MODEL_SIZE NUM_GPUS SEQ_LEN TP PP CP EP VP ETP FSDP MBS GBS PRECISION TASK TAG <<< "$exp"
     
     # Calculate derived values
@@ -224,6 +254,10 @@ for i in "${!EXPERIMENTS[@]}"; do
     EXP_NAME="nemo2507_${MODEL_NAME}_${MODEL_SIZE}_${PRECISION}_tp${TP}pp${PP}cp${CP}ep${EP}dp${DP}"
     if [[ "$TAG" != "nemo2507" ]]; then
         EXP_NAME="${EXP_NAME}_${TAG}"
+    fi
+    # Add tokendrop suffix if enabled
+    if [[ "$USE_TOKENDROP" == "True" ]]; then
+        EXP_NAME="${EXP_NAME}_tokendrop"
     fi
     
     echo "[$((i+1))/${#EXPERIMENTS[@]}] Submitting: ${EXP_NAME}"
@@ -272,7 +306,7 @@ for i in "${!EXPERIMENTS[@]}"; do
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.activations_checkpoint_num_layers=20"
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cpu_offloading=False"
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cpu_offloading_num_layers=0"
-        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=null"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=none"
     fi
     
     # LLAMA3 70B FP8: Reference requires FSDP, no recompute, no cpu_offload
@@ -283,13 +317,13 @@ for i in "${!EXPERIMENTS[@]}"; do
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.activations_checkpoint_num_layers=0"
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cpu_offloading=False"
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cpu_offloading_num_layers=0"
-        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=null"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=none"
     fi
     
     # LLAMA31 405B: Disable cuda_graphs for PP>1 configs
     if [[ "$MODEL_NAME" == "llama31" && "$MODEL_SIZE" == "405b" && $PP -gt 1 ]]; then
         echo "  [INFO] Disabling cuda_graphs for LLAMA31 405B (PP=${PP})"
-        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=null"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=none"
     fi
     
     # Qwen3-30B (MoE): Use transformer_engine CUDA graphs with specific scope
@@ -320,6 +354,13 @@ for i in "${!EXPERIMENTS[@]}"; do
         FSDP_FLAG="--use_megatron_fsdp true"
     fi
     
+    # Build token drop flag
+    TOKENDROP_FLAG=""
+    if [[ "$USE_TOKENDROP" == "True" ]]; then
+        TOKENDROP_FLAG="--use_tokendrop True"
+        echo "  [INFO] Token drop ENABLED for this experiment"
+    fi
+    
     # Run the experiment
     python3 scripts/performance/setup_experiment.py \
         --account ${ACCOUNT} \
@@ -347,6 +388,7 @@ for i in "${!EXPERIMENTS[@]}"; do
         ${VP_FLAG} \
         ${ETP_FLAG} \
         ${FSDP_FLAG} \
+        ${TOKENDROP_FLAG} \
         -mb ${MBS} \
         -gb ${GBS} \
         ++logger.log_throughput=True \
