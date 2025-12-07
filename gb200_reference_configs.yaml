@@ -1,0 +1,324 @@
+# =============================================================================
+# GB200 Reference Configurations (NeMo 25.07)
+# =============================================================================
+# Single source of truth for:
+#   1. run_nemo2507_validation_sweep.sh - Job launching
+#   2. collect_results.py - Result filtering and comparison
+#
+# Usage:
+#   Sweep:   ./run_nemo2507_validation_sweep.sh [--dry-run] [--model MODEL]
+#   Results: python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --use-reference
+#
+# =============================================================================
+
+metadata:
+  description: "NeMo 25.07 GB200 Reference Configurations"
+  source: "Official GB200 Performance Table"
+  date: "2025-12-06"
+  system: "gb200"
+  gpus_per_node: 4
+  
+  # Metric calculation settings for collect_results.py
+  # NeMo 25.07 style: 50 steps, average steps 35-50
+  metric_calculation:
+    max_steps: 50
+    warmup_steps: 0        # Not used when metric_range is set
+    metric_range: "35:50"  # Average steps 35-50 (1-indexed)
+
+# =============================================================================
+# Pre-train BF16 Configurations
+# =============================================================================
+pretrain_bf16:
+  llama3_8b:
+    # Matching collect_results.py format
+    model_pattern: "llama3_8b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    dp: 8
+    vp: 1
+    gpus: 8
+    gbs: 128
+    mbs: 2
+    seq_len: 8192
+    # Extended info for sweep script
+    model_name: "llama3"
+    model_size: "8b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    etp: 1
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 1
+    notes: "Dense model baseline"
+
+  llama3_70b:
+    model_pattern: "llama3_70b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    dp: 64
+    vp: 1
+    gpus: 64
+    gbs: 128
+    mbs: 1
+    seq_len: 8192
+    model_name: "llama3"
+    model_size: "70b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 1
+    etp: 1
+    recompute_layers: 20
+    cpu_offload_layers: 0
+    cuda_graphs: 0
+    notes: "FSDP with recompute for memory optimization"
+
+  llama31_405b:
+    model_pattern: "llama31_405b"
+    tp: 4
+    pp: 8
+    cp: 2
+    ep: 1
+    dp: 2
+    vp: 8
+    gpus: 128
+    gbs: 64
+    mbs: 1
+    seq_len: 8192
+    model_name: "llama31"
+    model_size: "405b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    etp: 1
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 0
+    notes: "Large model with VP=8 for pipeline efficiency"
+
+  deepseek_v3:
+    model_pattern: "deepseek_v3"
+    tp: 2
+    pp: 4
+    cp: 1
+    ep: 64
+    dp: 32
+    vp: 1
+    etp: 1
+    gpus: 256
+    gbs: 2048
+    mbs: 1
+    seq_len: 4096
+    model_name: "deepseek"
+    model_size: "v3"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 1
+    notes: "MoE with EP=64, ETP=1"
+
+  qwen3_30b:
+    model_pattern: "qwen3_30b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    dp: 8
+    vp: 1
+    etp: 1
+    gpus: 8
+    gbs: 512
+    mbs: 1
+    seq_len: 4096
+    model_name: "qwen3"
+    model_size: "30b_a3b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 1
+    notes: "MoE with EP=8"
+
+  qwen3_235b:
+    model_pattern: "qwen3_235b"
+    tp: 2
+    pp: 1
+    cp: 1
+    ep: 64
+    dp: 32
+    vp: 1
+    etp: 1
+    gpus: 64
+    gbs: 1024
+    mbs: 1
+    seq_len: 4096
+    model_name: "qwen3"
+    model_size: "235b_a22b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 1
+    notes: "Large MoE with TP=2, EP=64"
+
+# =============================================================================
+# Pre-train FP8 Configurations (for future use)
+# =============================================================================
+pretrain_fp8:
+  llama3_8b:
+    model_pattern: "llama3_8b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    dp: 8
+    vp: 1
+    gpus: 8
+    gbs: 128
+    mbs: 4
+    seq_len: 8192
+    model_name: "llama3"
+    model_size: "8b"
+    precision: "fp8"
+    task: "pretrain"
+    fsdp: 0
+    etp: 1
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 1
+    notes: "Dense model FP8"
+
+  llama3_70b:
+    model_pattern: "llama3_70b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    dp: 64
+    vp: 1
+    gpus: 64
+    gbs: 128
+    mbs: 1
+    seq_len: 8192
+    model_name: "llama3"
+    model_size: "70b"
+    precision: "fp8"
+    task: "pretrain"
+    fsdp: 1
+    etp: 1
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 0
+    notes: "FSDP mode for FP8"
+
+  llama31_405b:
+    model_pattern: "llama31_405b"
+    tp: 2
+    pp: 1
+    cp: 1
+    ep: 1
+    dp: 64
+    vp: 1
+    gpus: 128
+    gbs: 256
+    mbs: 1
+    seq_len: 8192
+    model_name: "llama31"
+    model_size: "405b"
+    precision: "fp8"
+    task: "pretrain"
+    fsdp: 1
+    etp: 1
+    recompute_layers: 0
+    cpu_offload_layers: 95
+    cuda_graphs: 0
+    notes: "FSDP with CPU offload for 405B FP8"
+
+# =============================================================================
+# Aliases for collect_results.py compatibility
+# =============================================================================
+# This section maps to the expected format for --match-config --use-reference
+reference_configs:
+  llama3_8b:
+    model_pattern: "llama3_8b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    dp: 8
+    gpus: 8
+    gbs: 128
+    seq_len: 8192
+    max_steps: 50  # NeMo 25.07: 50 steps, avg 35-50
+
+  llama3_70b:
+    model_pattern: "llama3_70b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 1
+    dp: 64
+    gpus: 64
+    gbs: 128
+    seq_len: 8192
+    max_steps: 50
+
+  llama31_405b:
+    model_pattern: "llama31_405b"
+    tp: 4
+    pp: 8
+    cp: 2
+    ep: 1
+    dp: 2
+    gpus: 128
+    gbs: 64
+    seq_len: 8192
+    max_steps: 50
+
+  deepseek_v3:
+    model_pattern: "deepseek_v3"
+    tp: 2
+    pp: 4
+    cp: 1
+    ep: 64
+    dp: 32
+    gpus: 256
+    gbs: 2048
+    seq_len: 4096
+    max_steps: 50
+
+  qwen3_30b:
+    model_pattern: "qwen3_30b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 8
+    dp: 8
+    gpus: 8
+    gbs: 512
+    seq_len: 4096
+    max_steps: 50
+
+  qwen3_235b:
+    model_pattern: "qwen3_235b"
+    tp: 2
+    pp: 1
+    cp: 1
+    ep: 64
+    dp: 32
+    gpus: 64
+    gbs: 1024
+    seq_len: 4096
+    max_steps: 50
+
+# Placeholder for rl_training_configs (required by collect_results.py)
+rl_training_configs: {}
+

@@ -6,6 +6,26 @@ Usage:
     python3 collect_results.py --sweep-dir ./exp_logs/sweeps/20251125_120000
     python3 collect_results.py --exp-dirs ./exp_logs/experiments/llama3_8b_*/
     python3 collect_results.py --latest 5  # Collect from latest 5 experiments
+    
+Metric Calculation Options:
+    # Default: skip first 3 warmup steps, average all remaining
+    python3 collect_results.py --scan-all
+    
+    # NeMo-RL style (RECOMMENDED for NeMo-RL comparison):
+    # Exactly matches get_wandb_log_for_nemorl.py calculation
+    # at_step=5, average_steps=5 → indices 3,4,5,6,7 → iteration 4,5,6,7,8
+    python3 collect_results.py --scan-all --nemorl-style
+    python3 collect_results.py --scan-all --match-config nemorl_reference_configs.yaml --use-reference
+    
+    # NeMo 25.07 style: 50 steps, average steps 35-50
+    python3 collect_results.py --scan-all --metric-range 35:50
+    python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --use-reference
+    
+    # Use last N iterations only
+    python3 collect_results.py --scan-all --use-last-n 15
+    
+    # Custom warmup steps
+    python3 collect_results.py --scan-all --warmup-steps 5
 """
 
 import argparse
@@ -456,12 +476,28 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
         if not result.precision and exp_info['precision']:
             result.precision = exp_info['precision']
     
-    iteration_pattern = re.compile(
+    # Pattern for iteration logs - two formats:
+    # Format 1 (older): iteration X/Y | ... throughput per GPU (TFLOP/s/GPU): Z ...
+    # Format 2 (newer): iteration X/Y | ... elapsed time per iteration (ms): Z | ... global batch size: N
+    iteration_pattern_v1 = re.compile(
         r'iteration\s+(\d+)/\s*(\d+)\s*\|'
         r'.*elapsed time per iteration \(ms\):\s*([\d.]+)\s*\|'
         r'.*throughput per GPU \(TFLOP/s/GPU\):\s*([\d.]+)\s*\|'
         r'(?:.*Tokens/sec/GPU:\s*([\d.]+)\s*\|)?'
         r'.*global batch size:\s*(\d+)'
+    )
+    
+    # Format 2: Newer logs without inline TFLOP/s - capture iteration, time, and GBS
+    iteration_pattern_v2 = re.compile(
+        r'iteration\s+(\d+)/\s*(\d+)\s*\|'
+        r'.*elapsed time per iteration \(ms\):\s*([\d.]+)\s*\|'
+        r'.*global batch size:\s*(\d+)'
+    )
+    
+    # Pattern for Step Time line (contains TFLOP/s info)
+    # Format: "Step Time : 27.67s GPU utilization: 970.0MODEL_TFLOP/s/GPU"
+    step_time_pattern = re.compile(
+        r'Step Time\s*:\s*([\d.]+)s\s+GPU utilization:\s*([\d.]+)MODEL_TFLOP/s/GPU'
     )
     
     memory_pattern = re.compile(
@@ -567,8 +603,16 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
                 result.memory_allocated_gb = float(mem_match.group(1))
                 result.memory_reserved_gb = float(mem_match.group(2))
             
-            # Parse iteration data
-            for match in iteration_pattern.finditer(content):
+            # Parse Step Time lines first (to get TFLOP/s info for v2 format)
+            step_time_data = []
+            for match in step_time_pattern.finditer(content):
+                step_time_data.append({
+                    'step_time': float(match.group(1)),
+                    'tflops_per_gpu': float(match.group(2)),
+                })
+            
+            # Parse iteration data - try v1 format first (with inline TFLOP/s)
+            for match in iteration_pattern_v1.finditer(content):
                 iter_num = int(match.group(1))
                 max_iter = int(match.group(2))
                 iter_time = float(match.group(3))
@@ -587,6 +631,31 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
                 result.max_steps = max_iter
                 result.global_batch_size = gbs
             
+            # If v1 pattern didn't match, try v2 pattern (newer format without inline TFLOP/s)
+            if not iterations:
+                for match in iteration_pattern_v2.finditer(content):
+                    iter_num = int(match.group(1))
+                    max_iter = int(match.group(2))
+                    iter_time = float(match.group(3))
+                    gbs = int(match.group(4))
+                    
+                    # Match TFLOP/s from step_time_data if available (index-1 because Step Time comes before iteration log)
+                    tflops = 0.0
+                    idx = len(iterations)
+                    if idx < len(step_time_data):
+                        tflops = step_time_data[idx].get('tflops_per_gpu', 0.0)
+                    
+                    iterations.append({
+                        'iteration': iter_num,
+                        'iteration_time_ms': iter_time,
+                        'tflops_per_gpu': tflops,
+                        'tokens_per_sec_per_gpu': 0.0,  # Not available in v2 format
+                        'global_batch_size': gbs,
+                    })
+                    
+                    result.max_steps = max_iter
+                    result.global_batch_size = gbs
+            
             # Check for OOM (Out of Memory) errors
             oom_patterns = [
                 'out of memory',
@@ -598,11 +667,36 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
             ]
             has_oom = any(pattern.lower() in content.lower() for pattern in oom_patterns)
             
+            # Check for job failure patterns (cancelled, crashed, timeout, etc.)
+            failure_patterns = [
+                'CANCELLED AT',
+                'CANCELLED BY',
+                'SIGTERM',
+                'SIGKILL',
+                'Traceback (most recent call last)',
+                'RuntimeError:',
+                'Exception raised',
+                'Broken pipe',
+                'Connection refused',
+                'TIMEOUT',
+            ]
+            has_failure = any(pattern in content for pattern in failure_patterns)
+            
             # Check completion status
-            if 'Training completed' in content or iterations and iterations[-1]['iteration'] >= result.max_steps:
+            # Multiple completion markers:
+            # - "Training completed"
+            # - "[after training is done]"
+            # - Last iteration reached max_steps
+            training_done = ('Training completed' in content or 
+                           '[after training is done]' in content or
+                           (iterations and iterations[-1]['iteration'] >= result.max_steps > 0))
+            
+            if training_done:
                 result.status = 'completed'
             elif has_oom:
                 result.status = 'oom'  # Out of Memory
+            elif has_failure:
+                result.status = 'failed'
             elif iterations:
                 result.status = 'running'
             else:
@@ -618,8 +712,8 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
         stable_iterations = iterations[3:]  # Skip first 3 warmup iterations
         
         tokens_list = [it['tokens_per_sec_per_gpu'] for it in stable_iterations if it['tokens_per_sec_per_gpu'] > 0]
-        tflops_list = [it['tflops_per_gpu'] for it in stable_iterations]
-        time_list = [it['iteration_time_ms'] for it in stable_iterations]
+        tflops_list = [it['tflops_per_gpu'] for it in stable_iterations if it['tflops_per_gpu'] > 0]
+        time_list = [it['iteration_time_ms'] for it in stable_iterations if it['iteration_time_ms'] > 0]
         
         if tokens_list:
             result.tokens_per_sec_per_gpu = sum(tokens_list) / len(tokens_list)
@@ -635,12 +729,119 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
         
         if time_list:
             result.iteration_time_ms = sum(time_list) / len(time_list)
+        
+        # If tokens_per_sec_per_gpu is 0 but we have iter_time, gbs, seq_len, and num_gpus, calculate it
+        if result.tokens_per_sec_per_gpu == 0 and result.iteration_time_ms > 0:
+            if result.global_batch_size > 0 and result.sequence_length > 0 and result.num_gpus > 0:
+                tokens_per_iter = result.global_batch_size * result.sequence_length
+                time_per_iter_sec = result.iteration_time_ms / 1000.0
+                result.tokens_per_sec_per_gpu = (tokens_per_iter / time_per_iter_sec) / result.num_gpus
     
     result.tokens_per_sec_total = result.tokens_per_sec_per_gpu * result.num_gpus
     result.total_iterations = len(iterations)
     result.iteration_data = iterations
     
     # Calculate samples per second
+    if result.iteration_time_ms > 0 and result.global_batch_size > 0:
+        result.samples_per_sec = result.global_batch_size / (result.iteration_time_ms / 1000)
+    
+    return result
+
+
+def recalculate_metrics(result: ExperimentResult, 
+                        warmup_steps: int = 3, 
+                        metric_range: str = None,
+                        use_last_n: int = None,
+                        nemorl_style: bool = False,
+                        at_step: int = 5,
+                        average_steps: int = 5) -> ExperimentResult:
+    """
+    Recalculate metrics with different parameters.
+    
+    Args:
+        result: ExperimentResult with iteration_data
+        warmup_steps: Number of warmup steps to skip (default: 3)
+        metric_range: Step range like "35:50" (start:end, 1-indexed, inclusive)
+        use_last_n: Use only last N iterations
+        nemorl_style: Use NeMo-RL style calculation (same as get_wandb_log_for_nemorl.py)
+        at_step: Center step for NeMo-RL style (default: 5)
+        average_steps: Number of steps to average for NeMo-RL style (default: 5)
+        
+    Returns:
+        Updated ExperimentResult with recalculated metrics
+        
+    NeMo-RL Style Calculation (from get_wandb_log_for_nemorl.py):
+        min_step = at_step - average_steps // 2  # 5 - 2 = 3 (0-indexed)
+        max_step = at_step + average_steps // 2 - 1 + (average_steps % 2)  # 5 + 2 - 1 + 1 = 7
+        history.loc[min_step:max_step]  # pandas loc (inclusive)
+        
+        For at_step=5, average_steps=5:
+        - min_step = 3, max_step = 7 (0-indexed, inclusive)
+        - Selects indices 3, 4, 5, 6, 7 (5 data points)
+        - In 1-indexed iteration terms: iteration 4, 5, 6, 7, 8
+    """
+    iterations = getattr(result, 'iteration_data', [])
+    if not iterations:
+        return result
+    
+    # Determine which iterations to use
+    if nemorl_style:
+        # NeMo-RL style: exactly matches get_wandb_log_for_nemorl.py
+        # Calculate step range using same formula as NeMo-RL
+        min_step = at_step - average_steps // 2  # 0-indexed start (inclusive)
+        max_step = at_step + average_steps // 2 - 1 + (average_steps % 2)  # 0-indexed end (inclusive)
+        
+        # iterations list is 0-indexed (iterations[0] = iteration 1 in log)
+        # So we use slice [min_step:max_step+1] to include max_step
+        if len(iterations) > max_step:
+            stable_iterations = iterations[min_step:max_step + 1]
+        else:
+            # Not enough iterations, use all available after min_step
+            stable_iterations = iterations[min_step:] if len(iterations) > min_step else iterations
+    elif metric_range:
+        # Parse range like "35:50" (1-indexed, inclusive)
+        try:
+            parts = metric_range.split(':')
+            start = int(parts[0]) - 1  # Convert to 0-indexed
+            end = int(parts[1]) if len(parts) > 1 else len(iterations)
+            # Filter iterations by their iteration number
+            stable_iterations = [it for it in iterations 
+                                if start < it.get('iteration', 0) <= end]
+        except (ValueError, IndexError):
+            print(f"Warning: Invalid metric-range format: {metric_range}. Using default.")
+            stable_iterations = iterations[warmup_steps:] if len(iterations) > warmup_steps else iterations
+    elif use_last_n:
+        # Use last N iterations
+        stable_iterations = iterations[-use_last_n:] if len(iterations) >= use_last_n else iterations
+    else:
+        # Default: skip warmup steps
+        stable_iterations = iterations[warmup_steps:] if len(iterations) > warmup_steps else iterations
+    
+    if not stable_iterations:
+        return result
+    
+    # Recalculate metrics
+    tokens_list = [it['tokens_per_sec_per_gpu'] for it in stable_iterations if it.get('tokens_per_sec_per_gpu', 0) > 0]
+    tflops_list = [it['tflops_per_gpu'] for it in stable_iterations if it.get('tflops_per_gpu', 0) > 0]
+    time_list = [it['iteration_time_ms'] for it in stable_iterations if it.get('iteration_time_ms', 0) > 0]
+    
+    if tokens_list:
+        result.tokens_per_sec_per_gpu = sum(tokens_list) / len(tokens_list)
+        result.tokens_per_sec_per_gpu_min = min(tokens_list)
+        result.tokens_per_sec_per_gpu_max = max(tokens_list)
+        if len(tokens_list) > 1:
+            mean = result.tokens_per_sec_per_gpu
+            variance = sum((x - mean) ** 2 for x in tokens_list) / len(tokens_list)
+            result.tokens_per_sec_per_gpu_std = variance ** 0.5
+    
+    if tflops_list:
+        result.tflops_per_gpu = sum(tflops_list) / len(tflops_list)
+    
+    if time_list:
+        result.iteration_time_ms = sum(time_list) / len(time_list)
+    
+    # Recalculate derived metrics
+    result.tokens_per_sec_total = result.tokens_per_sec_per_gpu * result.num_gpus
     if result.iteration_time_ms > 0 and result.global_batch_size > 0:
         result.samples_per_sec = result.global_batch_size / (result.iteration_time_ms / 1000)
     
@@ -958,6 +1159,7 @@ def print_summary_table(results: list[ExperimentResult]):
     COL_TASK = 9  # pretrain, sft, lora
     COL_PREC = 8  # fp8_cs, fp8_mx, nvfp4, bf16
     COL_STATUS = 10
+    COL_ITERS = 10  # Iterations (e.g., "100/100")
     COL_GPU = 6
     COL_NODES = 5   # Support up to 9999 nodes
     COL_GPUS = 6    # Support up to 99999 GPUs
@@ -973,8 +1175,8 @@ def print_summary_table(results: list[ExperimentResult]):
     has_fsdp = any(r.fsdp > 0 for r in results)
     
     # Calculate total width (without directory column - it will extend beyond)
-    # Base: Model + Task + Prec + Status + GPU + N + #GPU + TP + PP + CP + DP + EP + MBS + GBS + 3 metrics
-    total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_GPU + COL_NODES + COL_GPUS
+    # Base: Model + Task + Prec + Status + Iters + GPU + N + #GPU + TP + PP + CP + DP + EP + MBS + GBS + 3 metrics
+    total_width = COL_MODEL + COL_TASK + COL_PREC + COL_STATUS + COL_ITERS + COL_GPU + COL_NODES + COL_GPUS
     total_width += COL_FSDP if has_fsdp else 0
     total_width += (COL_PARA * 5)  # TP, PP, CP, DP, EP
     total_width += COL_PARA if has_vp else 0  # VP
@@ -984,7 +1186,7 @@ def print_summary_table(results: list[ExperimentResult]):
     
     # Build header dynamically
     # Order: FSDP → TP → CP → EP → PP → DP → VP → ETP → MBS → GBS
-    header = f"{'Model':<{COL_MODEL}}{'Task':<{COL_TASK}}{'Prec':<{COL_PREC}}{'Status':<{COL_STATUS}}{'GPU':<{COL_GPU}}"
+    header = f"{'Model':<{COL_MODEL}}{'Task':<{COL_TASK}}{'Prec':<{COL_PREC}}{'Status':<{COL_STATUS}}{'Iters':<{COL_ITERS}}{'GPU':<{COL_GPU}}"
     header += f"{'N':>{COL_NODES}}{'#GPU':>{COL_GPUS}}"
     if has_fsdp:
         header += f"{'F':>{COL_FSDP}}"  # FSDP flag
@@ -997,11 +1199,19 @@ def print_summary_table(results: list[ExperimentResult]):
     header += f"{'Tok/s/GPU':>{COL_METRIC}}{'TFLOP/s':>{COL_METRIC}}{'Iter(ms)':>{COL_METRIC}}"
     # Removed Exp Directory from header - will show log path below each row
     
-    # Group results by model (model_name + model_size)
+    # Group results by model (model_name + model_size, avoiding duplicates)
     from collections import defaultdict
     model_groups = defaultdict(list)
     for r in results:
-        model_key = f"{r.model_name}_{r.model_size}" if r.model_name else "unknown"
+        # Avoid duplicates like "qwen3_qwen3_32b"
+        if r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
+            model_key = r.model_size
+        elif r.model_name and r.model_size:
+            model_key = f"{r.model_name}_{r.model_size}"
+        elif r.model_size:
+            model_key = r.model_size
+        else:
+            model_key = r.model_name or "unknown"
         model_groups[model_key].append(r)
     
     # Sort each group by tokens/sec/gpu descending
@@ -1037,8 +1247,16 @@ def print_summary_table(results: list[ExperimentResult]):
             status_display = "OOM" if r.status == 'oom' else r.status
             color = status_colors.get(r.status, '')
             
-            # Format model name (combine model_name and model_size)
-            model_str = f"{r.model_name}_{r.model_size}"
+            # Format model name (combine model_name and model_size, avoiding duplicates)
+            # Handle cases like model_name="qwen3" and model_size="qwen3_32b" -> "qwen3_32b" (not "qwen3_qwen3_32b")
+            if r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
+                model_str = r.model_size
+            elif r.model_size and r.model_name:
+                model_str = f"{r.model_name}_{r.model_size}"
+            elif r.model_size:
+                model_str = r.model_size
+            else:
+                model_str = r.model_name or "unknown"
             if len(model_str) > COL_MODEL - 1:
                 model_str = model_str[:COL_MODEL - 1]
             
@@ -1051,9 +1269,15 @@ def print_summary_table(results: list[ExperimentResult]):
             # Format GPU type (truncate if too long)
             gpu_str = (r.gpu_type[:COL_GPU-1] if r.gpu_type else "?")
             
+            # Format iterations (total_iterations / max_steps)
+            if r.max_steps > 0:
+                iters_str = f"{r.total_iterations}/{r.max_steps}"
+            else:
+                iters_str = str(r.total_iterations) if r.total_iterations > 0 else "-"
+            
             # Build the row dynamically based on which columns are present
             # Order: FSDP → TP → CP → EP → PP → DP → VP → ETP → MBS → GBS
-            row = f"{model_str:<{COL_MODEL}}{task_str:<{COL_TASK}}{prec_str:<{COL_PREC}}{status_display:<{COL_STATUS}}{gpu_str:<{COL_GPU}}"
+            row = f"{model_str:<{COL_MODEL}}{task_str:<{COL_TASK}}{prec_str:<{COL_PREC}}{status_display:<{COL_STATUS}}{iters_str:<{COL_ITERS}}{gpu_str:<{COL_GPU}}"
             row += f"{r.num_nodes:>{COL_NODES}}{r.num_gpus:>{COL_GPUS}}"
             if has_fsdp:
                 row += f"{r.fsdp:>{COL_FSDP}}"
@@ -1068,10 +1292,11 @@ def print_summary_table(results: list[ExperimentResult]):
             
             # Apply color to status only (replace status in the row)
             status_start = COL_MODEL + COL_TASK + COL_PREC
+            status_end = status_start + COL_STATUS
             if color:
                 colored_status = f"{color}{status_display:<{COL_STATUS}}{RESET}"
                 # Replace the plain status with colored version
-                row = row[:status_start] + colored_status + row[status_start + COL_STATUS:]
+                row = row[:status_start] + colored_status + row[status_end:]
             
             print(row)
             
@@ -1186,6 +1411,10 @@ def matches_config(result: ExperimentResult, target_config: dict) -> bool:
     if target_config.get('seq_len') is not None and result.sequence_length != target_config['seq_len']:
         return False
     
+    # Check max_steps if specified in config
+    if target_config.get('max_steps') is not None and result.max_steps != target_config['max_steps']:
+        return False
+    
     return True
 
 
@@ -1260,6 +1489,8 @@ def filter_results(results: list[ExperimentResult], args) -> list[ExperimentResu
         filtered = [r for r in filtered if r.sequence_length == args.filter_seq]
     if args.filter_gpus is not None:
         filtered = [r for r in filtered if r.num_gpus == args.filter_gpus]
+    if args.filter_max_steps is not None:
+        filtered = [r for r in filtered if r.max_steps == args.filter_max_steps]
     if args.filter_model:
         filtered = [r for r in filtered if args.filter_model.lower() in r.model_name.lower() 
                    or args.filter_model.lower() in r.model_size.lower()
@@ -1354,6 +1585,7 @@ Examples:
     filter_group.add_argument('--filter-gbs', type=int, help='Filter by Global Batch Size')
     filter_group.add_argument('--filter-seq', type=int, help='Filter by Sequence Length')
     filter_group.add_argument('--filter-gpus', type=int, help='Filter by number of GPUs')
+    filter_group.add_argument('--filter-max-steps', type=int, help='Filter by max_steps (training iterations)')
     filter_group.add_argument('--filter-model', type=str, help='Filter by model name (partial match)')
     filter_group.add_argument('--filter-precision', type=str, help='Filter by precision (bf16, fp8_cs, etc.)')
     filter_group.add_argument('--filter-task', type=str, help='Filter by task (pretrain, sft, lora)')
@@ -1363,6 +1595,21 @@ Examples:
     parser.add_argument('--output-csv', type=Path, help='Output CSV file path')
     parser.add_argument('--output-json', type=Path, help='Output JSON file path')
     parser.add_argument('--no-print', action='store_true', help='Suppress table output')
+    
+    # Metric calculation options
+    metric_group = parser.add_argument_group('Metric calculation options')
+    metric_group.add_argument('--warmup-steps', type=int, default=3,
+                              help='Number of warmup steps to skip (default: 3)')
+    metric_group.add_argument('--metric-range', type=str, default=None,
+                              help='Calculate metrics from specific step range, e.g., "35:50" for steps 35-50')
+    metric_group.add_argument('--use-last-n', type=int, default=None,
+                              help='Use only last N iterations for metric calculation')
+    metric_group.add_argument('--nemorl-style', action='store_true',
+                              help='Use NeMo-RL style calculation: 5-step moving average around step 5')
+    metric_group.add_argument('--at-step', type=int, default=5,
+                              help='Center step for NeMo-RL style (default: 5)')
+    metric_group.add_argument('--average-steps', type=int, default=5,
+                              help='Number of steps to average for NeMo-RL style (default: 5)')
     
     args = parser.parse_args()
     
@@ -1401,6 +1648,67 @@ Examples:
     if not results:
         print("No results found matching the filters.")
         sys.exit(1)
+    
+    # Load metric calculation settings from config file if available
+    config_metric_settings = {}
+    if args.match_config:
+        config = load_config_file(args.match_config)
+        if config and 'metadata' in config and 'metric_calculation' in config.get('metadata', {}):
+            config_metric_settings = config['metadata']['metric_calculation']
+            print(f"Loaded metric settings from config: {config_metric_settings}")
+    
+    # Determine final metric settings (CLI args override config file)
+    final_warmup = args.warmup_steps
+    final_metric_range = args.metric_range
+    final_use_last_n = args.use_last_n
+    final_nemorl_style = args.nemorl_style
+    final_at_step = args.at_step
+    final_average_steps = args.average_steps
+    
+    # Apply config file settings if CLI args not explicitly set
+    if config_metric_settings:
+        if args.warmup_steps == 3 and 'warmup_steps' in config_metric_settings:
+            final_warmup = config_metric_settings.get('warmup_steps', 3)
+        if args.metric_range is None and 'metric_range' in config_metric_settings:
+            final_metric_range = config_metric_settings.get('metric_range')
+        if args.use_last_n is None and 'use_last_n' in config_metric_settings:
+            final_use_last_n = config_metric_settings.get('use_last_n')
+        # NeMo-RL style settings from config
+        if not args.nemorl_style and config_metric_settings.get('nemorl_style'):
+            final_nemorl_style = True
+        if args.at_step == 5 and 'at_step' in config_metric_settings:
+            final_at_step = config_metric_settings.get('at_step', 5)
+        if args.average_steps == 5 and 'average_steps' in config_metric_settings:
+            final_average_steps = config_metric_settings.get('average_steps', 5)
+    
+    # Recalculate metrics if custom metric options provided
+    need_recalc = (final_metric_range or final_use_last_n or final_warmup != 3 or final_nemorl_style)
+    if need_recalc:
+        metric_info = []
+        if final_nemorl_style:
+            # Calculate the actual index range for display
+            min_idx = final_at_step - final_average_steps // 2
+            max_idx = final_at_step + final_average_steps // 2 - 1 + (final_average_steps % 2)
+            metric_info.append(f"nemorl-style(at_step={final_at_step}, average_steps={final_average_steps})")
+            metric_info.append(f"→ indices {min_idx}:{max_idx} (iteration {min_idx+1}~{max_idx+1})")
+        elif final_metric_range:
+            metric_info.append(f"range={final_metric_range}")
+        elif final_use_last_n:
+            metric_info.append(f"last-{final_use_last_n}")
+        else:
+            metric_info.append(f"warmup={final_warmup}")
+        print(f"Recalculating metrics: {', '.join(metric_info)}")
+        
+        for result in results:
+            recalculate_metrics(
+                result, 
+                warmup_steps=final_warmup,
+                metric_range=final_metric_range,
+                use_last_n=final_use_last_n,
+                nemorl_style=final_nemorl_style,
+                at_step=final_at_step,
+                average_steps=final_average_steps
+            )
     
     # Print summary table
     if not args.no_print:
