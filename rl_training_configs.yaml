@@ -1,0 +1,52 @@
+# RL Training Target Configurations
+# These are the parallelism settings used in GRPO RL training
+# Use with: python3 collect_results.py --scan-all --match-config rl_training_configs.yaml --target-model <model_name>
+
+rl_training_configs:
+  # LLaMA3 8B - RL Training Config
+  # Train parallelism (TP,CP,EP,PP,DP) = (1,1,1,1,8)
+  llama3_8b:
+    model_pattern: "llama3_8b"  # Pattern to match in experiment path
+    tp: 1
+    cp: 1
+    ep: 1
+    pp: 1
+    dp: 8
+    gbs: 512
+    gpus: 8
+    seq_len: 8192
+    precision: bf16
+    task: pretrain
+
+  # LLaMA3 70B - RL Training Config
+  # Train parallelism (TP,CP,EP,PP,DP) = (4,1,1,2,2)
+  llama3_70b:
+    model_pattern: "llama3_70b"
+    tp: 4
+    cp: 1
+    ep: 1
+    pp: 2
+    dp: 2
+    gbs: 512
+    gpus: 16
+    seq_len: 8192
+    precision: bf16
+    task: pretrain
+
+  # Qwen3 30B A3B (MoE) - RL Training Config
+  # Train parallelism (TP,CP,EP,PP,DP) = (1,1,8,1,2)
+  # Note: For MoE, DP is calculated as world_size / (TP×PP×CP×EP) = 16/8 = 2
+  qwen3_30b:
+    model_pattern: "qwen3_30b"
+    tp: 1
+    cp: 1
+    ep: 8
+    pp: 1
+    dp: 2  # DP per expert group
+    gbs: 512
+    gpus: 16
+    seq_len: 4096
+    precision: bf16
+    task: pretrain
+
+

@@ -1,0 +1,269 @@
+# =============================================================================
+# NeMo-RL Reference Configurations for Megatron-Bridge
+# =============================================================================
+# Source: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/examples/configs/recipes/llm/performance/
+#
+# These configurations mirror the Megatron training settings used in NeMo-RL
+# synchronous GRPO training, allowing direct performance comparison.
+#
+# IMPORTANT: Verified by parsing YAML files with base config merging.
+# - Train GBS = policy.train_global_batch_size (actual training batch)
+# - Rollout GBS = num_prompts_per_step * num_generations_per_prompt (generation)
+#
+# Usage:
+#   Sweep:   ./run_nemorl_reference_sweep.sh [--dry-run] [--model MODEL]
+#   Results: python3 collect_results.py --scan-all --match-config nemorl_reference_configs.yaml --use-reference
+#
+# =============================================================================
+
+metadata:
+  description: "NeMo-RL Reference Training Configurations for GB200 (Verified)"
+  source: "nemo-rl launch_grpo.py presets"
+  date: "2025-12-06"
+  purpose: "Compare Megatron-Bridge training performance with NeMo-RL on GB200"
+  gpus_per_node: 4  # GB200 has 4 GPUs per node
+  verification_method: "launch_grpo.py preset analysis with YAML override"
+  
+  # Metric calculation settings for collect_results.py
+  # NeMo-RL style (EXACTLY matches get_wandb_log_for_nemorl.py):
+  #   at_step=5, average_steps=5 → 5-step moving average around step 5
+  #   min_step = at_step - average_steps // 2 = 5 - 2 = 3 (0-indexed)
+  #   max_step = at_step + average_steps // 2 - 1 + (average_steps % 2) = 5 + 2 - 1 + 1 = 7 (0-indexed)
+  #   history.loc[min_step:max_step] → indices 3, 4, 5, 6, 7 (inclusive)
+  # Result: Average of iterations 4, 5, 6, 7, 8 (1-indexed)
+  metric_calculation:
+    max_steps: 100
+    nemorl_style: true     # Use exact NeMo-RL calculation method
+    at_step: 5             # Center step (same as get_wandb_log_for_nemorl.py)
+    average_steps: 5       # Number of steps to average (same as get_wandb_log_for_nemorl.py)
+
+# =============================================================================
+# GB200 Configurations from launch_grpo.py presets (4 GPUs/node)
+# These match EXACTLY what NeMo-RL runs with `python launch_grpo.py --preset <name>`
+# =============================================================================
+
+# =============================================================================
+# NeMo-RL Training Settings - MODEL-SPECIFIC
+# Each model uses different YAML with different settings!
+# =============================================================================
+
+# LLaMA models (llama8b, llama70b) - grpo-llama3.1-8b-instruct-2n8g.yaml
+llama_training_config:
+  optimizer:
+    lr: 5.0e-7           # Different from Qwen!
+    min_lr: 5.0e-8
+    weight_decay: 0.0    # Different from Qwen!
+    betas: [0.9, 0.999]
+    use_distributed_optimizer: true
+    use_precision_aware_optimizer: true
+    lr_warmup_iters: 2
+  gradient:
+    clip_grad: 1.0
+    overlap_grad_reduce: true
+    overlap_param_gather: true
+  megatron:
+    activation_checkpointing: true   # Different from Qwen!
+    defer_fp32_logits: true          # Different from Qwen!
+    apply_rope_fusion: true
+    bias_activation_fusion: true
+
+# Qwen models (qwen30b, qwen32b) - grpo-qwen3-*.yaml
+qwen_training_config:
+  optimizer:
+    lr: 3.0e-7           # Different from LLaMA!
+    min_lr: 3.0e-8
+    weight_decay: 0.01   # Different from LLaMA!
+    betas: [0.9, 0.999]
+    use_distributed_optimizer: true
+    use_precision_aware_optimizer: true
+    lr_warmup_iters: 2   # qwen30b uses 50, qwen32b uses 2
+  gradient:
+    clip_grad: 1.0
+    overlap_grad_reduce: true
+    overlap_param_gather: true
+  megatron:
+    activation_checkpointing: false  # Different from LLaMA!
+    defer_fp32_logits: false         # Different from LLaMA!
+    apply_rope_fusion: true
+    bias_activation_fusion: true
+
+# Qwen30B specific
+qwen30b_extra:
+  env_vars:
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:False"
+  lr_warmup_iters: 50  # Different from other models!
+
+nemorl_sync:
+  # ---------------------------------------------------------------------------
+  # LLaMA3.1-8B: launch_grpo.py preset "llama8b"
+  # 2 nodes x 4 GPUs = 8 GPUs
+  # Overrides from YAML: PP 2→1
+  # ---------------------------------------------------------------------------
+  llama31_8b:
+    model_pattern: "llama3_8b"
+    tp: 1
+    pp: 1              # Override from launch_grpo.py (YAML has PP=2)
+    cp: 1
+    ep: 1
+    dp: 8              # 8 / (1 * 1 * 1) = 8
+    vp: 1
+    etp: 1
+    gpus: 8            # GB200: 2 nodes x 4 GPUs
+    train_gbs: 512
+    mbs: 1
+    seq_len: 4096
+    model_name: "llama3"
+    model_size: "8b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    cuda_graphs: 1     # PP=1 compatible
+    activation_checkpointing: true
+    sequence_parallel: false
+    source: "launch_grpo.py preset: llama8b"
+
+  # ---------------------------------------------------------------------------
+  # LLaMA3.1-70B: launch_grpo.py preset "llama70b"
+  # 4 nodes x 4 GPUs = 16 GPUs
+  # ---------------------------------------------------------------------------
+  llama31_70b:
+    model_pattern: "llama3_70b"
+    tp: 4
+    pp: 2
+    cp: 1
+    ep: 1
+    dp: 2              # 16 / (4 * 2 * 1) = 2
+    vp: 1
+    etp: 1
+    gpus: 16           # GB200: 4 nodes x 4 GPUs
+    train_gbs: 512
+    mbs: 1
+    seq_len: 4096
+    model_name: "llama3"
+    model_size: "70b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    cuda_graphs: 0     # PP>1 incompatible
+    activation_checkpointing: true
+    sequence_parallel: true
+    source: "launch_grpo.py preset: llama70b"
+
+  # ---------------------------------------------------------------------------
+  # Qwen3-30B-A3B: launch_grpo.py preset "qwen30b"
+  # 4 nodes x 4 GPUs = 16 GPUs
+  # Overrides from YAML: TP 2→1, GPUs 32→16
+  # ---------------------------------------------------------------------------
+  qwen3_30b:
+    model_pattern: "qwen3_30b"
+    tp: 1              # Override from launch_grpo.py (YAML has TP=2)
+    pp: 1
+    cp: 1
+    ep: 8
+    dp: 16             # 16 / (1 * 1 * 1) = 16
+    vp: 1
+    etp: 1
+    gpus: 16           # GB200: 4 nodes x 4 GPUs
+    train_gbs: 512
+    mbs: 1
+    seq_len: 4096
+    model_name: "qwen3"
+    model_size: "30b_a3b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    cuda_graphs: 1     # PP=1 compatible
+    activation_checkpointing: false
+    sequence_parallel: false  # TP=1 so no seq parallel
+    source: "launch_grpo.py preset: qwen30b"
+
+  # ---------------------------------------------------------------------------
+  # Qwen3-32B: launch_grpo.py preset "qwen32b"
+  # 4 nodes x 4 GPUs = 16 GPUs
+  # Overrides from YAML: PP 4→1, GPUs 32→16
+  # ---------------------------------------------------------------------------
+  qwen3_32b:
+    model_pattern: "qwen3_32b"
+    tp: 4
+    pp: 1              # Override from launch_grpo.py (YAML has PP=4)
+    cp: 1
+    ep: 1
+    dp: 4              # 16 / (4 * 1 * 1) = 4
+    vp: 1
+    etp: 1
+    gpus: 16           # GB200: 4 nodes x 4 GPUs
+    train_gbs: 512
+    mbs: 1
+    seq_len: 4096
+    model_name: "qwen3"
+    model_size: "32b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    cuda_graphs: 1     # PP=1 compatible
+    activation_checkpointing: false
+    sequence_parallel: true   # TP=4 so seq parallel enabled
+    source: "launch_grpo.py preset: qwen32b"
+
+# =============================================================================
+# Models NOT in launch_grpo.py presets (need custom GB200 configs if needed)
+# =============================================================================
+# DeepSeek-V3: No preset in launch_grpo.py
+# Qwen3-235B: No preset in launch_grpo.py
+
+# =============================================================================
+# Reference configs for collect_results.py (--use-reference)
+# GB200 configs from launch_grpo.py presets
+# =============================================================================
+reference_configs:
+  llama31_8b:
+    model_pattern: "llama3_8b"
+    tp: 1
+    pp: 1          # GB200 preset override
+    cp: 1
+    ep: 1
+    dp: 8
+    gpus: 8        # GB200: 2 nodes x 4 GPUs
+    gbs: 512
+    seq_len: 4096
+    max_steps: 100  # Expected max iterations
+
+  llama31_70b:
+    model_pattern: "llama3_70b"
+    tp: 4
+    pp: 2
+    cp: 1
+    ep: 1
+    dp: 2
+    gpus: 16       # GB200: 4 nodes x 4 GPUs
+    gbs: 512
+    seq_len: 4096
+    max_steps: 100  # Expected max iterations
+
+  qwen3_30b:
+    model_pattern: "qwen3_30b"
+    tp: 1          # GB200 preset override (YAML has TP=2)
+    pp: 1
+    cp: 1
+    ep: 8
+    dp: 16
+    gpus: 16       # GB200: 4 nodes x 4 GPUs
+    gbs: 512
+    seq_len: 4096
+    max_steps: 100  # Expected max iterations
+
+  qwen3_32b:
+    model_pattern: "qwen3_32b"
+    tp: 4
+    pp: 1          # GB200 preset override (YAML has PP=4)
+    cp: 1
+    ep: 1
+    dp: 4
+    gpus: 16       # GB200: 4 nodes x 4 GPUs
+    gbs: 512
+    seq_len: 4096
+    max_steps: 100  # Expected max iterations
+
+# Placeholder for rl_training_configs
+rl_training_configs: {}
+
