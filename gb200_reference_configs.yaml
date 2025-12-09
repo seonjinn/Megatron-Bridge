@@ -169,6 +169,29 @@ pretrain_bf16:
     cuda_graphs: 1
     notes: "Large MoE with TP=2, EP=64"
 
+  gpt_oss_20b:
+    model_pattern: "gpt_oss_20b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 2
+    dp: 8
+    vp: 1
+    etp: 1
+    gpus: 8
+    gbs: 128
+    mbs: 4
+    seq_len: 4096
+    model_name: "gpt_oss"
+    model_size: "20b"
+    precision: "bf16"
+    task: "pretrain"
+    fsdp: 0
+    recompute_layers: 0
+    cpu_offload_layers: 0
+    cuda_graphs: 0
+    notes: "GPT-OSS 20B MoE with EP=2, CUDA graphs disabled (incompatible with MoE router)"
+
 # =============================================================================
 # Pre-train FP8 Configurations (for future use)
 # =============================================================================
@@ -247,6 +270,8 @@ pretrain_fp8:
 # =============================================================================
 # This section maps to the expected format for --match-config --use-reference
 reference_configs:
+  # NeMo 25.07 reference: 50 steps, metric range 35-50
+  # Run experiments with run_nemo2507_validation_sweep.sh (MAX_STEPS=50)
   llama3_8b:
     model_pattern: "llama3_8b"
     tp: 1
@@ -256,8 +281,7 @@ reference_configs:
     dp: 8
     gpus: 8
     gbs: 128
-    seq_len: 8192
-    max_steps: 50  # NeMo 25.07: 50 steps, avg 35-50
+    max_steps: 50
 
   llama3_70b:
     model_pattern: "llama3_70b"
@@ -268,8 +292,8 @@ reference_configs:
     dp: 64
     gpus: 64
     gbs: 128
-    seq_len: 8192
     max_steps: 50
+    # NOTE: Requires 64 GPUs (16 GB200 nodes)
 
   llama31_405b:
     model_pattern: "llama31_405b"
@@ -280,8 +304,8 @@ reference_configs:
     dp: 2
     gpus: 128
     gbs: 64
-    seq_len: 8192
     max_steps: 50
+    # NOTE: Requires 128 GPUs (32 GB200 nodes)
 
   deepseek_v3:
     model_pattern: "deepseek_v3"
@@ -292,8 +316,8 @@ reference_configs:
     dp: 32
     gpus: 256
     gbs: 2048
-    seq_len: 4096
     max_steps: 50
+    # NOTE: Requires 256 GPUs (64 GB200 nodes)
 
   qwen3_30b:
     model_pattern: "qwen3_30b"
@@ -304,7 +328,6 @@ reference_configs:
     dp: 8
     gpus: 8
     gbs: 512
-    seq_len: 4096
     max_steps: 50
 
   qwen3_235b:
@@ -316,7 +339,18 @@ reference_configs:
     dp: 32
     gpus: 64
     gbs: 1024
-    seq_len: 4096
+    max_steps: 50
+    # NOTE: Requires 64 GPUs (16 GB200 nodes)
+
+  gpt_oss_20b:
+    model_pattern: "gpt_oss_20b"
+    tp: 1
+    pp: 1
+    cp: 1
+    ep: 2
+    dp: 8
+    gpus: 8
+    gbs: 128
     max_steps: 50
 
 # Placeholder for rl_training_configs (required by collect_results.py)

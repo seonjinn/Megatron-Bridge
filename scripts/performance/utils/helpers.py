@@ -226,6 +226,16 @@ def set_user_overrides(recipe: ConfigContainer, kwargs: Dict[str, Any]) -> None:
         recipe.model.tensor_model_parallel_size = kwargs.get("tensor_model_parallel_size")
     if kwargs.get("pipeline_model_parallel_size") is not None:
         recipe.model.pipeline_model_parallel_size = kwargs.get("pipeline_model_parallel_size")
+        # Disable CPU offloading and FSDP when PP > 1 (not supported with Pipeline Parallelism)
+        if kwargs.get("pipeline_model_parallel_size") > 1:
+            recipe.model.cpu_offloading_num_layers = 0
+            recipe.model.cpu_offloading = False
+            # Also disable FSDP - it has a bug with PP > 1 (einops mesh calculation error)
+            recipe.ddp.use_megatron_fsdp = False
+            # Reset FSDP-related settings that cause tensor type mismatch
+            recipe.model.init_model_with_meta_device = False
+            recipe.ddp.preserve_fp32_weights = False
+            logger.info(f"Disabled CPU offloading and FSDP (incompatible with PP={kwargs.get('pipeline_model_parallel_size')})")
     if kwargs.get("context_parallel_size") is not None:
         recipe.model.context_parallel_size = kwargs.get("context_parallel_size")
     if kwargs.get("virtual_pipeline_model_parallel_size") is not None:

@@ -411,13 +411,14 @@ for i in "${!EXPERIMENTS[@]}"; do
             ;;
     esac
     
-    # MoE models (EP > 1): Use transformer_engine CUDA graphs with specific scope
+    # Qwen3-30B (MoE): Use transformer_engine CUDA graphs with specific scope
     # Full iteration cuda_graph (local) is incompatible with some MoE operations
     # Use module-level CUDA graphs for: moe_router, moe_preprocess, attn
-    if [[ $EP -gt 1 ]]; then
-        echo "  [INFO] MoE model (EP=${EP}): Using CUDA graph scope [moe_router,moe_preprocess,attn]"
+    # Note: This is specific to Qwen3-30B based on the reference sheet
+    if [[ "$MODEL_NAME" == "qwen3" && "$MODEL_SIZE" == "30b_a3b" ]]; then
+        echo "  [INFO] Qwen3-30B MoE: Using CUDA graph scope [moe_router,moe_preprocess,attn]"
         EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=transformer_engine"
-        EXTRA_FLAGS="${EXTRA_FLAGS} '++model.cuda_graph_scope=[moe_router,moe_preprocess,attn]'"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_scope=\\[moe_router,moe_preprocess,attn\\]"
     fi
     
     # Build VP flag (only if VP > 1)

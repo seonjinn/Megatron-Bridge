@@ -111,9 +111,15 @@ def main(
     )
     logger.info(f"Custom mounts: {executor.container_mounts}")
 
-    exp_name = f"{model_name}_{model_size}_{domain}_{task}" + (
-        "_bf16" if compute_dtype == "bf16" else f"_{compute_dtype}"
-    )
+    # Build experiment name with parallelism info for easy identification in squeue
+    precision_suffix = "_bf16" if compute_dtype == "bf16" else f"_{compute_dtype}"
+    parallelism_suffix = ""
+    if tp_size is not None or pp_size is not None or cp_size is not None:
+        tp_str = f"tp{tp_size}" if tp_size else ""
+        pp_str = f"pp{pp_size}" if pp_size else ""
+        cp_str = f"cp{cp_size}" if cp_size else ""
+        parallelism_suffix = f"_{tp_str}{pp_str}{cp_str}" if any([tp_size, pp_size, cp_size]) else ""
+    exp_name = f"{model_name}_{model_size}_{domain}_{task}{precision_suffix}{parallelism_suffix}"
     
     # Explicitly set PYTHONPATH in the executor's environment variables to ensure
     # it propagates to the sbatch script and container execution.

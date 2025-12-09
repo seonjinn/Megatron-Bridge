@@ -367,7 +367,7 @@ for i in "${!EXPERIMENTS[@]}"; do
     # Disable CPU offloading when PP > 1
     if [[ $PP -gt 1 ]]; then
         HYDRA_FLAGS="${HYDRA_FLAGS} ++model.cpu_offloading_num_layers=0"
-        HYDRA_FLAGS="${HYDRA_FLAGS} ++model.cuda_graph_impl=null"
+        HYDRA_FLAGS="${HYDRA_FLAGS} ++model.cuda_graph_impl=none"
         echo "  [INFO] Disabling CPU offloading and cuda_graphs (PP=${PP})"
     fi
     

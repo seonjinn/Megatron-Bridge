@@ -225,7 +225,7 @@ reference_configs:
     dp: 8
     gpus: 8        # GB200: 2 nodes x 4 GPUs
     gbs: 512
-    seq_len: 4096
+    # seq_len: 4096  # TODO: Enable when experiments use seq_len=4096
     max_steps: 100  # Expected max iterations
 
   llama31_70b:
@@ -237,7 +237,7 @@ reference_configs:
     dp: 2
     gpus: 16       # GB200: 4 nodes x 4 GPUs
     gbs: 512
-    seq_len: 4096
+    # seq_len: 4096  # TODO: Enable when experiments use seq_len=4096
     max_steps: 100  # Expected max iterations
 
   qwen3_30b:
@@ -249,7 +249,7 @@ reference_configs:
     dp: 16
     gpus: 16       # GB200: 4 nodes x 4 GPUs
     gbs: 512
-    seq_len: 4096
+    # seq_len: 4096  # TODO: Enable when experiments use seq_len=4096
     max_steps: 100  # Expected max iterations
 
   qwen3_32b:
@@ -261,7 +261,7 @@ reference_configs:
     dp: 4
     gpus: 16       # GB200: 4 nodes x 4 GPUs
     gbs: 512
-    seq_len: 4096
+    # seq_len: 4096  # TODO: Enable when experiments use seq_len=4096
     max_steps: 100  # Expected max iterations
 
 # Placeholder for rl_training_configs

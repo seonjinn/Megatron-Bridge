@@ -19,6 +19,7 @@ from utils.helpers import (
     set_workload_base_configs,
 )
 
+from megatron.bridge.recipes.qwen import qwen3_32b_pretrain_config
 from megatron.bridge.recipes.qwen.qwen3_moe import qwen3_30b_a3b_pretrain_config, qwen3_235b_a22b_pretrain_config
 from megatron.bridge.training.comm_overlap import CommOverlapConfig
 from megatron.bridge.training.config import ConfigContainer
@@ -36,7 +37,9 @@ def set_qwen3_common_configs(cfg: ConfigContainer) -> None:
     cfg.model.recompute_granularity = None
     cfg.model.recompute_method = None
     cfg.model.recompute_num_layers = None
-    cfg.model.moe_router_fusion = True
+    # Only set moe_router_fusion if model has MoE
+    if hasattr(cfg.model, 'moe_router_fusion'):
+        cfg.model.moe_router_fusion = True
 
     cfg.model.seq_length = 4096
     cfg.dataset.sequence_length = 4096
@@ -44,7 +47,9 @@ def set_qwen3_common_configs(cfg: ConfigContainer) -> None:
     cfg.mixed_precision.grad_reduce_in_fp32 = False
     cfg.ddp.grad_reduce_in_fp32 = False
 
-    cfg.model = apply_moe_token_drop(cfg.model)
+    # Only apply token drop if model has MoE
+    if hasattr(cfg.model, 'num_experts'):
+        cfg.model = apply_moe_token_drop(cfg.model)
 
 
 def qwen3_235b_a22b_gb300_config(precision: str = "bf16") -> ConfigContainer:
@@ -209,6 +214,28 @@ def qwen3_30b_a3b_h100_config(precision: str = "bf16") -> ConfigContainer:
         precision_config = get_precision_config(precision)
 
     cfg = qwen3_30b_a3b_pretrain_config(
+        mock=True,
+        precision_config=precision_config,
+        comm_overlap_config=CommOverlapConfig(tp_comm_overlap=True),
+    )
+    set_qwen3_common_configs(cfg)
+    set_workload_base_configs(cfg, base_cfg)
+
+    return cfg
+
+
+def qwen3_32b_gb200_config(precision: str = "bf16") -> ConfigContainer:
+    """GB200, baseline config for Qwen3 32B."""
+    if precision == "bf16":
+        base_cfg = base_cfgs.QWEN3_32B_GB200_BF16_BASE_CONFIG
+        precision_config = get_precision_config(precision)
+    else:
+        base_cfg = base_cfgs.QWEN3_32B_GB200_FP8_CS_BASE_CONFIG
+        if precision == "fp8_mx":
+            base_cfg = base_cfgs.QWEN3_32B_GB200_FP8_MX_BASE_CONFIG
+        precision_config = get_precision_config(precision)
+
+    cfg = qwen3_32b_pretrain_config(
         mock=True,
         precision_config=precision_config,
         comm_overlap_config=CommOverlapConfig(tp_comm_overlap=True),

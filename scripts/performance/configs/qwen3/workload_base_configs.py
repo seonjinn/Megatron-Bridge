@@ -31,6 +31,11 @@ BASE_QWEN3_30B_A3B_CONFIG = WorkloadBaseConfig(
 )
 
 
+BASE_QWEN3_32B_CONFIG = WorkloadBaseConfig(
+    global_batch_size=512,
+)
+
+
 # Qwen3 235B A22B presets ----------------------------------------------------
 
 
@@ -212,6 +217,36 @@ QWEN3_30B_A3B_H100_FP8_CS_BASE_CONFIG = replace(
 )
 
 
+# Qwen3 32B presets ----------------------------------------------------------
+
+
+QWEN3_32B_GB200_BF16_BASE_CONFIG = replace(
+    BASE_QWEN3_32B_CONFIG,
+    num_gpus=16,
+    tensor_model_parallel_size=4,
+    pipeline_model_parallel_size=1,
+    context_parallel_size=1,
+    micro_batch_size=2,
+    cuda_graph_impl="local",
+    cuda_graph_scope="full_iteration",
+)
+
+
+QWEN3_32B_GB200_FP8_CS_BASE_CONFIG = replace(
+    BASE_QWEN3_32B_CONFIG,
+    num_gpus=16,
+    tensor_model_parallel_size=4,
+    pipeline_model_parallel_size=1,
+    context_parallel_size=1,
+    micro_batch_size=4,
+    cuda_graph_impl="local",
+    cuda_graph_scope="full_iteration",
+)
+
+
+QWEN3_32B_GB200_FP8_MX_BASE_CONFIG = QWEN3_32B_GB200_FP8_CS_BASE_CONFIG
+
+
 __all__ = [
     "QWEN3_235B_A22B_GB300_BF16_BASE_CONFIG",
     "QWEN3_235B_A22B_GB300_FP8_CS_BASE_CONFIG",
@@ -235,4 +270,7 @@ __all__ = [
     "QWEN3_30B_A3B_B200_FP8_MX_BASE_CONFIG",
     "QWEN3_30B_A3B_H100_BF16_BASE_CONFIG",
     "QWEN3_30B_A3B_H100_FP8_CS_BASE_CONFIG",
+    "QWEN3_32B_GB200_BF16_BASE_CONFIG",
+    "QWEN3_32B_GB200_FP8_CS_BASE_CONFIG",
+    "QWEN3_32B_GB200_FP8_MX_BASE_CONFIG",
 ]

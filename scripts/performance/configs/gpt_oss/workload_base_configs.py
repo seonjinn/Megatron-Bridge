@@ -19,6 +19,20 @@ from dataclasses import replace
 from utils.utils import WorkloadBaseConfig
 
 
+# GPT-OSS 20B Base Configuration
+# Based on recipe defaults: TP=1, PP=4, EP=2
+# Note: CUDA graphs disabled due to MoE router random number generation incompatibility
+BASE_GPT_OSS_20B_CONFIG = WorkloadBaseConfig(
+    num_gpus=8,
+    expert_model_parallel_size=2,
+    expert_tensor_parallel_size=1,
+    micro_batch_size=4,
+    global_batch_size=128,
+    cuda_graph_impl=None,
+    cuda_graph_scope=None,
+)
+
+
 BASE_GPT_OSS_120B_CONFIG = WorkloadBaseConfig(
     num_gpus=64,
     expert_model_parallel_size=8,
@@ -27,6 +41,48 @@ BASE_GPT_OSS_120B_CONFIG = WorkloadBaseConfig(
     global_batch_size=512,
     cuda_graph_impl="local",
     cuda_graph_scope="full_iteration",
+)
+
+
+# GPT-OSS 20B presets ----------------------------------------------------------
+
+GPT_OSS_20B_GB300_BF16_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
+)
+
+
+GPT_OSS_20B_GB300_FP8_MX_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
+)
+
+
+GPT_OSS_20B_GB200_BF16_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
+)
+
+
+GPT_OSS_20B_GB200_FP8_MX_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
+)
+
+
+GPT_OSS_20B_B200_BF16_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
+)
+
+
+GPT_OSS_20B_B200_FP8_MX_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
+)
+
+
+GPT_OSS_20B_H100_BF16_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
+)
+
+
+GPT_OSS_20B_H100_FP8_CS_BASE_CONFIG = replace(
+    BASE_GPT_OSS_20B_CONFIG,
 )
 
 
@@ -73,6 +129,16 @@ GPT_OSS_120B_H100_FP8_CS_BASE_CONFIG = replace(
 
 
 __all__ = [
+    # GPT-OSS 20B
+    "GPT_OSS_20B_GB300_BF16_BASE_CONFIG",
+    "GPT_OSS_20B_GB300_FP8_MX_BASE_CONFIG",
+    "GPT_OSS_20B_GB200_BF16_BASE_CONFIG",
+    "GPT_OSS_20B_GB200_FP8_MX_BASE_CONFIG",
+    "GPT_OSS_20B_B200_BF16_BASE_CONFIG",
+    "GPT_OSS_20B_B200_FP8_MX_BASE_CONFIG",
+    "GPT_OSS_20B_H100_BF16_BASE_CONFIG",
+    "GPT_OSS_20B_H100_FP8_CS_BASE_CONFIG",
+    # GPT-OSS 120B
     "GPT_OSS_120B_GB300_BF16_BASE_CONFIG",
     "GPT_OSS_120B_GB300_FP8_MX_BASE_CONFIG",
     "GPT_OSS_120B_GB200_BF16_BASE_CONFIG",

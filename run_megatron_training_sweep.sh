@@ -421,6 +421,37 @@ for i in "${!EXPERIMENTS[@]}"; do
             ;;
     esac
     
+    # ============================================================================
+    # Model-specific overrides
+    # ============================================================================
+    
+    # LLAMA3 70B BF16: Activation checkpointing and disable CPU offloading
+    if [[ "$MODEL_NAME" == "llama3" && "$MODEL_SIZE" == "70b" && "$PRECISION" == "bf16" ]]; then
+        echo "  [INFO] Applying LLAMA3 70B BF16 overrides:"
+        echo "         - activations_checkpoint_num_layers=20 (recompute)"
+        echo "         - cpu_offloading=False"
+        echo "         - cuda_graph disabled (PP=2)"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.activations_checkpoint_num_layers=20"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cpu_offloading=False"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cpu_offloading_num_layers=0"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=none"
+    fi
+    
+    # Qwen3-30B (MoE): Use transformer_engine CUDA graphs with specific scope
+    # Full iteration cuda_graph (local) is incompatible with some MoE operations
+    # Use module-level CUDA graphs for: moe_router, moe_preprocess, attn
+    if [[ "$MODEL_NAME" == "qwen3" && "$MODEL_SIZE" == "30b_a3b" ]]; then
+        echo "  [INFO] Qwen3-30B MoE: Using CUDA graph scope [moe_router,moe_preprocess,attn]"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=transformer_engine"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_scope=\\[moe_router,moe_preprocess,attn\\]"
+    fi
+    
+    # Qwen3-235B (MoE): Disable cuda_graphs for PP > 1
+    if [[ "$MODEL_NAME" == "qwen3" && "$MODEL_SIZE" == "235b_a22b" && $PP -gt 1 ]]; then
+        echo "  [INFO] Qwen3-235B MoE: Disabling cuda_graphs (PP=${PP})"
+        EXTRA_FLAGS="${EXTRA_FLAGS} ++model.cuda_graph_impl=none"
+    fi
+    
     # Build VP flag (only if VP > 1)
     VP_FLAG=""
     if [[ $VP -gt 1 ]]; then

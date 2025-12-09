@@ -7,7 +7,7 @@
 #
 # Options:
 #   --dry-run       Print commands without executing
-#   --model NAME    Run only specific model (llama3_8b, llama3_70b, llama31_405b, deepseek_v3, qwen3_30b, qwen3_235b)
+#   --model NAME    Run only specific model (llama3_8b, llama3_70b, llama31_405b, deepseek_v3, qwen3_30b, qwen3_235b, gpt_oss_20b)
 #
 
 set -e
@@ -122,6 +122,7 @@ mapfile -t LLAMA31_405B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTIO
 mapfile -t DEEPSEEK_V3_LARGE_GBS_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "deepseek_v3")
 mapfile -t QWEN3_30B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "qwen3_30b")
 mapfile -t QWEN3_235B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "qwen3_235b")
+mapfile -t GPT_OSS_20B_2507_CONFIGS < <(load_configs_from_yaml "${CONFIG_SECTION}" "gpt_oss_20b")
 
 # ============================================================================
 # Build Experiment List Based on Filter
@@ -144,6 +145,7 @@ if [[ -z "$FILTER_MODEL" ]]; then
     # DEEPSEEK_V3_SMALL_GBS_2507_CONFIGS removed - not in GB200 reference
     add_configs "${QWEN3_30B_2507_CONFIGS[@]}"
     add_configs "${QWEN3_235B_2507_CONFIGS[@]}"
+    add_configs "${GPT_OSS_20B_2507_CONFIGS[@]}"
 else
     case "$FILTER_MODEL" in
         llama3_8b|llama8b)
@@ -186,6 +188,9 @@ else
         qwen3_235b|qwen235b)
             add_configs "${QWEN3_235B_2507_CONFIGS[@]}"
             ;;
+        gpt_oss_20b|gptoss20b|gpt_oss|gptoss)
+            add_configs "${GPT_OSS_20B_2507_CONFIGS[@]}"
+            ;;
         all_qwen)
             add_configs "${QWEN3_30B_2507_CONFIGS[@]}"
             add_configs "${QWEN3_235B_2507_CONFIGS[@]}"
@@ -195,6 +200,9 @@ else
             add_configs "${LLAMA3_70B_2507_CONFIGS[@]}"
             add_configs "${LLAMA31_405B_2507_CONFIGS[@]}"
             ;;
+        all_gpt_oss)
+            add_configs "${GPT_OSS_20B_2507_CONFIGS[@]}"
+            ;;
         *)
             echo "Unknown model: $FILTER_MODEL"
             echo "Available models:"
@@ -202,7 +210,8 @@ else
             echo "  deepseek_v3 (GBS=2048 only, matching GB200 reference)"
             echo "  qwen3_30b (dropless), qwen3_30b_tokendrop, qwen3_30b_tokendrop_mbs4, qwen3_30b_both"
             echo "  qwen3_235b"
-            echo "  all_qwen, all_llama"
+            echo "  gpt_oss_20b"
+            echo "  all_qwen, all_llama, all_gpt_oss"
             exit 1
             ;;
     esac
@@ -447,6 +456,7 @@ echo "  python3 collect_results.py --scan-all --match-config gb200_reference_con
 echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model llama3_70b --use-reference"
 echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model deepseek_v3 --use-reference"
 echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model qwen3_30b --use-reference"
+echo "  python3 collect_results.py --scan-all --match-config gb200_reference_configs.yaml --target-model gpt_oss_20b --use-reference"
 echo ""
 echo "Expected metrics to validate:"
 echo "  - Tokens/sec/GPU"
