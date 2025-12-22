@@ -476,18 +476,20 @@ def parse_log_file(log_path: Path) -> ExperimentResult:
         if config_info['fsdp'] > 0:
             result.fsdp = config_info['fsdp']
     
-    # Fallback: parse model info from experiment directory name if not found in config
-    if not result.model_name or not result.precision:
-        exp_type_dir = log_path.parent.parent.parent.name  # e.g., llama3_8b_llm_pretrain_bf16
-        exp_info = parse_exp_name(exp_type_dir)
-        if not result.model_name and exp_info['model_name']:
-            result.model_name = exp_info['model_name']
-        if not result.model_size and exp_info['model_size']:
-            result.model_size = exp_info['model_size']
-        if not result.task and exp_info['task']:
-            result.task = exp_info['task']
-        if not result.precision and exp_info['precision']:
-            result.precision = exp_info['precision']
+    # ALWAYS parse model info from experiment directory name for consistent grouping
+    # Directory name format: qwen3_30b_a3b_llm_pretrain_bf16_tp1pp1cp1
+    # This ensures model_size is always "30b_a3b" (not "30b_ep8" from wandb name)
+    exp_type_dir = log_path.parent.parent.parent.name  # e.g., llama3_8b_llm_pretrain_bf16
+    exp_info = parse_exp_name(exp_type_dir)
+    # Always use directory-based model_name and model_size for consistent grouping
+    if exp_info['model_name']:
+        result.model_name = exp_info['model_name']
+    if exp_info['model_size']:
+        result.model_size = exp_info['model_size']
+    if not result.task and exp_info['task']:
+        result.task = exp_info['task']
+    if not result.precision and exp_info['precision']:
+        result.precision = exp_info['precision']
     
     # Pattern for iteration logs - two formats:
     # Format 1 (older): iteration X/Y | ... throughput per GPU (TFLOP/s/GPU): Z ...
@@ -1271,14 +1273,13 @@ def print_summary_table(results: list[ExperimentResult]):
     header += f"{'Tok/s':>{COL_METRIC_WIDE}}{'Tok/s/GPU':>{COL_METRIC_WIDE}}"
     # Removed Exp Directory from header - will show log path below each row
     
-    # Group results by model (prefer TAG if available, else model_name + model_size)
+    # Group results by model_name + model_size (ignoring TAG and parallelism)
+    # This groups all qwen3_30b_a3b experiments together regardless of EP/TP/etc.
     from collections import defaultdict
     model_groups = defaultdict(list)
     for r in results:
-        # Use TAG if available (new format), otherwise fallback to model_name + model_size
-        if r.tag and r.tag != "unknown":
-            model_key = r.tag
-        elif r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
+        # Always use model_name + model_size for grouping (not TAG)
+        if r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
             model_key = r.model_size
         elif r.model_name and r.model_size:
             model_key = f"{r.model_name}_{r.model_size}"
@@ -1288,12 +1289,38 @@ def print_summary_table(results: list[ExperimentResult]):
             model_key = r.model_name or "unknown"
         model_groups[model_key].append(r)
     
-    # Sort each group by tokens/sec/gpu descending
+    # Filter failed experiments: keep only the most recent one per parallelism config
+    # completed, running, oom are always shown; failed shows only newest per config
+    def filter_failed_keep_latest(results_list):
+        """Keep all non-failed, but for failed only keep the most recent per parallelism config."""
+        non_failed = [r for r in results_list if r.status not in ('failed', 'error')]
+        failed = [r for r in results_list if r.status in ('failed', 'error')]
+        
+        if not failed:
+            return results_list
+        
+        # Group failed by parallelism config (TP, PP, CP, EP, DP)
+        from collections import defaultdict
+        failed_by_config = defaultdict(list)
+        for r in failed:
+            config_key = (r.tp, r.pp, r.cp, r.ep, r.dp)
+            failed_by_config[config_key].append(r)
+        
+        # Keep only the most recent failed per config (by exp_dir name which includes timestamp)
+        latest_failed = []
+        for config_key, failed_list in failed_by_config.items():
+            # Sort by exp_dir descending (newer experiments have later timestamps)
+            sorted_failed = sorted(failed_list, key=lambda x: x.exp_dir, reverse=True)
+            latest_failed.append(sorted_failed[0])  # Keep only the newest
+        
+        return non_failed + latest_failed
+    
+    # Apply filter and sort each group by tokens/sec/gpu descending
     for model_key in model_groups:
+        model_groups[model_key] = filter_failed_keep_latest(model_groups[model_key])
         model_groups[model_key] = sorted(
             model_groups[model_key], 
-            key=lambda x: x.tokens_per_sec_per_gpu, 
-            reverse=True
+            key=lambda x: (x.status != 'completed', -x.tokens_per_sec_per_gpu),  # completed first, then by throughput
         )
     
     # Sort model groups by best throughput in each group (descending)
@@ -1321,11 +1348,9 @@ def print_summary_table(results: list[ExperimentResult]):
             status_display = "OOM" if r.status == 'oom' else r.status
             color = status_colors.get(r.status, '')
             
-            # Format model name (prefer TAG if available, else combine model_name and model_size)
-            # Handle cases like model_name="qwen3" and model_size="qwen3_32b" -> "qwen3_32b"
-            if r.tag and r.tag != "unknown":
-                model_str = r.tag
-            elif r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
+            # Format model name (always use model_name + model_size, not TAG)
+            # Parallelism differences are shown in TP/PP/CP/EP/DP columns
+            if r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
                 model_str = r.model_size
             elif r.model_size and r.model_name:
                 model_str = f"{r.model_name}_{r.model_size}"
