@@ -132,6 +132,12 @@ def slurm_executor(
         template_vars={"pre_cmds": " ; ".join(custom_bash_cmds)},
     )
 
+    # Lyris GB200 cluster: partition="gb200", NO gres (GPU allocation handled by partition)
+    # OCI-HSG GB200 cluster: partition="batch_long", requires gres="gpu:N"
+    # Detect Lyris by partition name "gb200" or "gb300"
+    is_lyris_cluster = partition.lower() in ["gb200", "gb300", "gb200-hp", "gb300-hp"]
+    gres_spec = None if is_lyris_cluster else f"gpu:{num_gpus_per_node}"
+
     executor = run.SlurmExecutor(
         account=account,
         partition=partition,
@@ -149,7 +155,7 @@ def slurm_executor(
         segment=segment,
         network=network,
         launcher=launcher,
-        gres=f"gpu:{num_gpus_per_node}",
+        gres=gres_spec,
     )
 
     return executor

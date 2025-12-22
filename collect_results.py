@@ -63,6 +63,8 @@ class ExperimentResult:
     exp_dir: str = ""
     log_file_path: str = ""  # Full path to log file (for clickable links)
     job_id: str = ""
+    tag: str = ""  # Experiment tag (e.g., "qwen3_30b_ep8", "llama31_8b_nemorl")
+    extra_flags: str = ""  # Extra flags (e.g., "activation_ckpt", "seq_parallel", "none")
     
     # Model configuration
     model_name: str = ""
@@ -907,12 +909,21 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
             # Ref16: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|EXP_DIR (16 fields)
             # Ref17: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR (17 fields)
             # Ref18: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR (18 fields)
-            # Ref20: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR (20 fields)
+            # Ref20a: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR (20 fields, FSDP format)
+            # Ref20b: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|SEQ_LEN|MBS|GBS|PRECISION|EXTRA|TAG|EXP_DIR (20 fields, TAG format)
             if len(parts) >= 10:
                 # Detect format based on number of fields
                 if len(parts) >= 20:
-                    # New Reference format with VP, ETP, FSDP, and TASK fields
-                    # JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                    # Two possible 20-field formats:
+                    # Ref20a (FSDP format): JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                    # Ref20b (TAG format):  JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|SEQ_LEN|MBS|GBS|PRECISION|EXTRA|TAG|EXP_DIR
+                    # Distinguish by field 13: FSDP is 0/1, SEQ_LEN is >= 128
+                    try:
+                        field_13_value = int(parts[13])
+                        is_tag_format = field_13_value >= 128  # SEQ_LEN is typically >= 128
+                    except ValueError:
+                        is_tag_format = False
+                    
                     exp_dir = Path(parts[19])
                     idx_offset = 2  # Additional fields: NODES, GPU_TYPE
                 elif len(parts) >= 18:
@@ -955,19 +966,46 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                         
                         # Parse nodes and GPU type based on format
                         if len(parts) >= 20:
-                            # 20-field format: JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                            # Two possible 20-field formats - detect which one
+                            try:
+                                field_13_value = int(parts[13])
+                                is_tag_format = field_13_value >= 128  # SEQ_LEN is typically >= 128
+                            except ValueError:
+                                is_tag_format = False
+                            
                             try:
                                 result.num_gpus = int(parts[3])
                                 result.num_nodes = int(parts[4])
                                 result.gpu_type = parts[5]
                                 result.vp = int(parts[11])
                                 result.etp = int(parts[12])
-                                result.fsdp = int(parts[13])
-                                result.sequence_length = int(parts[14])
-                                result.micro_batch_size = int(parts[15])
-                                result.global_batch_size = int(parts[16])
-                                result.precision = parts[17]
-                                result.task = parts[18]
+                                
+                                if is_tag_format:
+                                    # Ref20b (TAG format): JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|SEQ_LEN|MBS|GBS|PRECISION|EXTRA|TAG|EXP_DIR
+                                    result.sequence_length = int(parts[13])
+                                    result.micro_batch_size = int(parts[14])
+                                    result.global_batch_size = int(parts[15])
+                                    result.precision = parts[16]
+                                    # parts[17] = EXTRA_FLAGS (e.g., "activation_ckpt", "seq_parallel", "none")
+                                    # parts[18] = TAG (e.g., "qwen3_30b_ep8", "llama31_8b_nemorl")
+                                    result.extra_flags = parts[17]
+                                    result.tag = parts[18]
+                                    # Use tag as model identifier for grouping
+                                    if result.tag and result.tag != "unknown":
+                                        # Don't modify exp_name, just store tag separately
+                                        pass
+                                    # Infer task from exp_dir or default to pretrain
+                                    result.task = 'pretrain'
+                                    result.fsdp = 0  # TAG format doesn't have FSDP field
+                                else:
+                                    # Ref20a (FSDP format): JOB_ID|MODEL|SIZE|GPUS|NODES|GPU_TYPE|TP|PP|CP|EP|DP|VP|ETP|FSDP|SEQ_LEN|MBS|GBS|PRECISION|TASK|EXP_DIR
+                                    result.fsdp = int(parts[13])
+                                    result.sequence_length = int(parts[14])
+                                    result.micro_batch_size = int(parts[15])
+                                    result.global_batch_size = int(parts[16])
+                                    result.precision = parts[17]
+                                    result.task = parts[18]
+                                
                                 if result.num_nodes > 0:
                                     result.gpus_per_node = result.num_gpus // result.num_nodes
                             except (ValueError, IndexError):
@@ -1041,7 +1079,7 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                         if result.tp == 1 and result.pp == 1 and result.dp == 1:
                             try:
                                 if len(parts) >= 20:
-                                    # 20-field format: TP at index 6, VP at index 11, ETP at index 12, FSDP at index 13
+                                    # Both 20-field formats have same parallelism indices (6-12)
                                     result.tp = int(parts[6])
                                     result.pp = int(parts[7])
                                     result.cp = int(parts[8])
@@ -1049,7 +1087,7 @@ def collect_from_sweep(sweep_dir: Path) -> list[ExperimentResult]:
                                     result.dp = int(parts[10])
                                     result.vp = int(parts[11])
                                     result.etp = int(parts[12])
-                                    result.fsdp = int(parts[13])
+                                    # FSDP is only in Ref20a format (already parsed above)
                                 elif len(parts) >= 18:
                                     # 18-field format: TP at index 6, VP at index 11
                                     result.tp = int(parts[6])
@@ -1116,10 +1154,11 @@ def collect_latest(base_dir: Path, n: int) -> list[ExperimentResult]:
 def save_results_csv(results: list[ExperimentResult], output_path: Path):
     """Save results to CSV file."""
     fieldnames = [
-        'exp_name', 'status', 'model_name', 'model_size', 'task', 'precision',
+        'exp_name', 'tag', 'status', 'model_name', 'model_size', 'task', 'precision',
         'gpu_type', 'num_nodes', 'gpus_per_node', 'num_gpus',
         'fsdp', 'tp', 'pp', 'cp', 'dp', 'ep', 'vp', 'etp',
         'micro_batch_size', 'global_batch_size', 'sequence_length', 'dp_per_ep',
+        'extra_flags',
         'tokens_per_sec_per_gpu', 'tokens_per_sec_total',
         'tflops_per_gpu', 'iteration_time_ms', 'samples_per_sec',
         'tokens_per_sec_per_gpu_min', 'tokens_per_sec_per_gpu_max', 'tokens_per_sec_per_gpu_std',
@@ -1232,12 +1271,14 @@ def print_summary_table(results: list[ExperimentResult]):
     header += f"{'Tok/s':>{COL_METRIC_WIDE}}{'Tok/s/GPU':>{COL_METRIC_WIDE}}"
     # Removed Exp Directory from header - will show log path below each row
     
-    # Group results by model (model_name + model_size, avoiding duplicates)
+    # Group results by model (prefer TAG if available, else model_name + model_size)
     from collections import defaultdict
     model_groups = defaultdict(list)
     for r in results:
-        # Avoid duplicates like "qwen3_qwen3_32b"
-        if r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
+        # Use TAG if available (new format), otherwise fallback to model_name + model_size
+        if r.tag and r.tag != "unknown":
+            model_key = r.tag
+        elif r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
             model_key = r.model_size
         elif r.model_name and r.model_size:
             model_key = f"{r.model_name}_{r.model_size}"
@@ -1280,9 +1321,11 @@ def print_summary_table(results: list[ExperimentResult]):
             status_display = "OOM" if r.status == 'oom' else r.status
             color = status_colors.get(r.status, '')
             
-            # Format model name (combine model_name and model_size, avoiding duplicates)
-            # Handle cases like model_name="qwen3" and model_size="qwen3_32b" -> "qwen3_32b" (not "qwen3_qwen3_32b")
-            if r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
+            # Format model name (prefer TAG if available, else combine model_name and model_size)
+            # Handle cases like model_name="qwen3" and model_size="qwen3_32b" -> "qwen3_32b"
+            if r.tag and r.tag != "unknown":
+                model_str = r.tag
+            elif r.model_size and r.model_name and r.model_size.startswith(f"{r.model_name}_"):
                 model_str = r.model_size
             elif r.model_size and r.model_name:
                 model_str = f"{r.model_name}_{r.model_size}"
