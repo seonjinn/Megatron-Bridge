@@ -42,7 +42,7 @@ except ImportError:
     quick_gelu = torch.nn.functional.gelu
 
 
-@MegatronModelBridge.register_bridge(source=GptOssForCausalLM, target=GPTModel, model_type="gpt_oss")
+@MegatronModelBridge.register_bridge(source=GptOssForCausalLM, target=GPTModel, provider=GPTOSSProvider, model_type="gpt_oss")
 class GPTOSSBridge(MegatronModelBridge):
     """
     Megatron Hub Bridge for GPT-OSS models.
