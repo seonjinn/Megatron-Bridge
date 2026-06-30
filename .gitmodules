@@ -1,4 +1,4 @@
 [submodule "3rdparty/Megatron-LM"]
 	path = 3rdparty/Megatron-LM
 	url = https://github.com/seonjinn/Megatron-LM.git
-	branch = sna/hybridep-seqpack-pinned-optimizer-offload-20260629
+	branch = sna/mlm-main-only-20260630
