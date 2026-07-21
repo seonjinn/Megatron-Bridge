@@ -27,6 +27,7 @@ from megatron.bridge.models.conversion.auto_bridge import AutoBridge
 from megatron.bridge.models.conversion.model_bridge import WeightConversionTask
 from megatron.bridge.models.conversion.modelopt_utils import (
     QuantMeta,
+    _clone_quant_amax_pair_cpu,
     _fuse_grouped_projection_names,
     _grouped_expert_projection_name,
     _modelopt_pre_ep_mapping,
@@ -99,6 +100,62 @@ def _bridge_for_export(conversion_tasks, exported_weights):
                     yield finalized_name, finalized_tensor
 
     return FakeBridge()
+
+
+def test_clone_quant_amax_pair_cpu_preserves_cpu_fallback_semantics():
+    weight_amax = torch.tensor([-2.0], dtype=torch.float64)
+    input_amax = torch.tensor([-3.0, 4.0], dtype=torch.float64)
+
+    actual_weight, actual_input = _clone_quant_amax_pair_cpu(weight_amax, input_amax)
+
+    torch.testing.assert_close(actual_weight, torch.tensor([2.0]))
+    torch.testing.assert_close(actual_input, torch.tensor([-3.0, 4.0]))
+    assert actual_weight.dtype == torch.float32
+    assert actual_input.dtype == torch.float32
+    assert actual_weight.device.type == "cpu"
+    assert actual_input.device.type == "cpu"
+
+
+def test_clone_quant_amax_pair_cpu_preserves_missing_input_path():
+    actual_weight, actual_input = _clone_quant_amax_pair_cpu(
+        torch.tensor([-2.0]),
+        None,
+    )
+
+    torch.testing.assert_close(actual_weight, torch.tensor([2.0]))
+    assert actual_input is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_clone_quant_amax_pair_cpu_coalesces_cuda_metadata(monkeypatch):
+    weight_amax = torch.tensor([-2.0, 5.0], dtype=torch.float64, device="cuda")
+    input_amax = torch.tensor([-3.0, 4.0, -6.0], dtype=torch.float64, device="cuda")
+    clone_calls = []
+    clone_cpu = modelopt_utils._clone_cpu
+
+    def recording_clone_cpu(value):
+        clone_calls.append(value)
+        return clone_cpu(value)
+
+    monkeypatch.setattr(modelopt_utils, "_clone_cpu", recording_clone_cpu)
+
+    actual_weight, actual_input = _clone_quant_amax_pair_cpu(weight_amax, input_amax)
+
+    assert len(clone_calls) == 1
+    assert clone_calls[0].device.type == "cuda"
+    assert clone_calls[0].dtype == torch.float64
+    assert tuple(clone_calls[0].shape) == (weight_amax.numel() + input_amax.numel(),)
+    torch.testing.assert_close(actual_weight, torch.tensor([2.0, 5.0]))
+    torch.testing.assert_close(actual_input, torch.tensor([-3.0, 4.0, -6.0]))
+    assert actual_weight.shape == weight_amax.shape
+    assert actual_input.shape == input_amax.shape
+    assert actual_weight.dtype == torch.float32
+    assert actual_input.dtype == torch.float32
+    assert actual_weight.device.type == "cpu"
+    assert actual_input.device.type == "cpu"
+    assert actual_weight.data_ptr() != weight_amax.data_ptr()
+    assert actual_input.data_ptr() != input_amax.data_ptr()
+    assert actual_weight.data_ptr() != actual_input.data_ptr()
 
 
 def test_matches_quant_ignore_pattern_handles_model_prefix_and_scale_suffixes():
