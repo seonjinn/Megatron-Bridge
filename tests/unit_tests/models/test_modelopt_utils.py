@@ -128,8 +128,8 @@ def test_clone_quant_amax_pair_cpu_preserves_missing_input_path():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_clone_quant_amax_pair_cpu_coalesces_cuda_metadata(monkeypatch):
-    weight_amax = torch.tensor([-2.0, 5.0], dtype=torch.float64, device="cuda")
-    input_amax = torch.tensor([-3.0, 4.0, -6.0], dtype=torch.float64, device="cuda")
+    weight_amax = torch.tensor([[-2.0], [5.0]], dtype=torch.float64, device="cuda")
+    input_amax = torch.tensor([[-3.0, 4.0, -6.0]], dtype=torch.float64, device="cuda")
     clone_calls = []
     clone_cpu = modelopt_utils._clone_cpu
 
@@ -145,17 +145,15 @@ def test_clone_quant_amax_pair_cpu_coalesces_cuda_metadata(monkeypatch):
     assert clone_calls[0].device.type == "cuda"
     assert clone_calls[0].dtype == torch.float64
     assert tuple(clone_calls[0].shape) == (weight_amax.numel() + input_amax.numel(),)
-    torch.testing.assert_close(actual_weight, torch.tensor([2.0, 5.0]))
-    torch.testing.assert_close(actual_input, torch.tensor([-3.0, 4.0, -6.0]))
+    torch.testing.assert_close(actual_weight, torch.tensor([[2.0], [5.0]]))
+    torch.testing.assert_close(actual_input, torch.tensor([[-3.0, 4.0, -6.0]]))
     assert actual_weight.shape == weight_amax.shape
     assert actual_input.shape == input_amax.shape
     assert actual_weight.dtype == torch.float32
     assert actual_input.dtype == torch.float32
     assert actual_weight.device.type == "cpu"
     assert actual_input.device.type == "cpu"
-    assert actual_weight.data_ptr() != weight_amax.data_ptr()
-    assert actual_input.data_ptr() != input_amax.data_ptr()
-    assert actual_weight.data_ptr() != actual_input.data_ptr()
+    assert actual_weight.untyped_storage().data_ptr() != actual_input.untyped_storage().data_ptr()
 
 
 def test_matches_quant_ignore_pattern_handles_model_prefix_and_scale_suffixes():
