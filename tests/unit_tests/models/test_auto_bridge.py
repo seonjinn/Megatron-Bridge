@@ -240,6 +240,33 @@ class TestAutoBridge:
                 assert result.hf_pretrained == mock_model
                 mock_from_pretrained.assert_called_once_with(model_id, trust_remote_code=True)
 
+    def test_from_hf_pretrained_reuses_validated_config(self):
+        class NoReloadPreTrainedCausalLM(PreTrainedCausalLM):
+            def __init__(self):
+                pass
+
+            def _load_config(self):
+                raise AssertionError("validated config was loaded a second time")
+
+        validated_config = Mock(spec=PretrainedConfig)
+        validated_config.architectures = ["GPT2LMHeadModel"]
+        lazy_wrapper = NoReloadPreTrainedCausalLM()
+
+        with (
+            patch(
+                "megatron.bridge.models.conversion.auto_bridge.safe_load_config_with_retry",
+                return_value=validated_config,
+            ),
+            patch(
+                "megatron.bridge.models.conversion.auto_bridge.PreTrainedCausalLM.from_pretrained",
+                return_value=lazy_wrapper,
+            ),
+            patch.object(AutoBridge, "_validate_config"),
+        ):
+            bridge = AutoBridge.from_hf_pretrained("gpt2", trust_remote_code=True)
+
+        assert bridge.hf_pretrained.config is validated_config
+
     def test_from_pretrained_with_additional_kwargs(self):
         """Test from_pretrained with various kwargs."""
         # Setup mocks

@@ -412,7 +412,9 @@ class AutoBridge(Generic[MegatronModelT]):
                         kwargs["rope_scaling"][key] = value
 
         try:
-            return cls(PreTrainedCausalLM.from_pretrained(path, **kwargs))
+            hf_pretrained = PreTrainedCausalLM.from_pretrained(path, **kwargs)
+            hf_pretrained.config = config
+            return cls(hf_pretrained)
         except Exception as e:
             raise ValueError(f"Failed to load model with AutoBridge: {e}") from e
 
