@@ -18,10 +18,12 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, mock_open, patch
 
+import megatron.core
 import pytest
 import torch
 from megatron.core.msc_utils import MultiStorageClientFeature
 
+import megatron.bridge.training.checkpointing as checkpointing_module
 from megatron.bridge.training.checkpointing import (
     _DIRECT_ITERATION_DIR_SENTINEL,
     DATALOADER_STATE_SUBDIR,
@@ -71,6 +73,18 @@ class _DummyClass:
 
 
 _dummy_obj = _DummyClass()
+
+
+def test_checkpointing_imports_against_nested_mcore_without_deprecated_strategy_helpers():
+    """Ensure Bridge uses its nested MCore and direct torch-dist strategies."""
+    repository_root = Path(__file__).resolve().parents[3]
+    nested_mcore_root = repository_root / "3rdparty" / "Megatron-LM"
+
+    assert Path(megatron.core.__file__).is_relative_to(nested_mcore_root)
+    assert checkpointing_module.TorchDistLoadShardedStrategy is not None
+    assert checkpointing_module.TorchDistSaveShardedStrategy is not None
+    assert not hasattr(checkpointing_module, "get_default_load_sharded_strategy")
+    assert not hasattr(checkpointing_module, "get_default_save_sharded_strategy")
 
 
 class TestCheckpointUtilities:
