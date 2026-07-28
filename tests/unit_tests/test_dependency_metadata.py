@@ -15,12 +15,14 @@
 
 from pathlib import Path
 
+import pytest
 import tomllib
 
 
 CACHED_DEPENDENCIES_TRANSFORMERS_REQUIREMENT = "transformers>=5.8.1,<5.9.0"
 
 
+@pytest.mark.unit
 def test_transformers_requirement_matches_nemo_workspace_cache_contract() -> None:
     """Keep Bridge metadata compatible with NeMo's cached workspace dependency list."""
     repository_root = Path(__file__).resolve().parents[2]
