@@ -1,3 +1,4 @@
 [submodule "3rdparty/Megatron-LM"]
 	path = 3rdparty/Megatron-LM
-	url = https://github.com/NVIDIA/Megatron-LM.git
+	url = https://github.com/seonjinn/Megatron-LM.git
+	branch = sna/pr2964-hybridep-seqpack-mlm-main-20260731
