@@ -25,11 +25,7 @@ def test_fast_hadamard_transform_has_lock_time_metadata() -> None:
     uv_configuration = pyproject["tool"]["uv"]
     metadata_entries = uv_configuration["dependency-metadata"]
     fast_hadamard_metadata = next(
-        (
-            entry
-            for entry in metadata_entries
-            if entry["name"] == "fast-hadamard-transform"
-        ),
+        (entry for entry in metadata_entries if entry["name"] == "fast-hadamard-transform"),
         None,
     )
 
