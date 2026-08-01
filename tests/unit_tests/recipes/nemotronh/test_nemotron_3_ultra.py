@@ -84,6 +84,14 @@ def test_pretrain_uses_initial_parallelism_values() -> None:
 
 
 @pytest.mark.unit
+def test_ultra_default_remains_graph_disabled() -> None:
+    """Ultra remains graph-disabled unless an experiment overrides it."""
+    cfg = nemotron_3_ultra_pretrain_config()
+
+    assert cfg.model.cuda_graph_impl == "none"
+
+
+@pytest.mark.unit
 def test_openmath_sft_uses_initial_parallelism_values() -> None:
     cfg = nemotron_3_ultra_sft_openmathinstruct2_packed_config()
 

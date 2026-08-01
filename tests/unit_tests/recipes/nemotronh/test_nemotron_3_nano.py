@@ -42,7 +42,10 @@ from megatron.bridge.recipes.nemotronh.nemotron_3_nano import (
     nemotron_3_nano_sft_config,
 )
 from megatron.bridge.training.config import ConfigContainer
-from megatron.bridge.utils.cuda_graph import cuda_graph_module_names
+from megatron.bridge.utils.cuda_graph import (
+    cuda_graph_module_names,
+    set_cuda_graph_modules,
+)
 
 
 @pytest.mark.unit
@@ -127,6 +130,18 @@ class TestNemotron3NanoPretrain:
         # HybridEP should be enabled by default - check MoE dispatcher settings
         assert config.model.moe_token_dispatcher_type == "flex"
         assert config.model.moe_shared_expert_overlap is False
+        assert config.model.moe_flex_dispatcher_backend == "hybridep"
+
+    def test_nano_accepts_te_hybrid_scope_override(self) -> None:
+        """A TE hybrid scope override preserves the Nano MoE topology."""
+        config = nemotron_3_nano_pretrain_config()
+
+        set_cuda_graph_modules(
+            config.model,
+            ["attn", "mamba", "moe_router", "moe_preprocess"],
+        )
+
+        assert config.model.moe_token_dispatcher_type == "flex"
         assert config.model.moe_flex_dispatcher_backend == "hybridep"
 
     def test_pretrain_config_moe_kernel_settings(self):

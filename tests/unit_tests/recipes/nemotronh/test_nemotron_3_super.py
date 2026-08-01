@@ -35,6 +35,7 @@ from megatron.bridge.recipes.nemotronh.nemotron_3_super import (
     nemotron_3_super_sft_config,
 )
 from megatron.bridge.training.config import ConfigContainer
+from megatron.bridge.utils.cuda_graph import set_cuda_graph_modules
 
 
 @pytest.mark.unit
@@ -100,6 +101,18 @@ class TestNemotron3SuperPretrain:
         assert config.model.keep_mtp_spec_in_bf16 is True
         assert config.model.calculate_per_token_loss is True
         assert config.model.mtp_loss_scaling_factor == 0.3
+
+    def test_super_scope_override_keeps_mtp_and_latent_moe(self) -> None:
+        """A TE hybrid scope override preserves Super MTP and latent MoE."""
+        config = nemotron_3_super_pretrain_config()
+
+        set_cuda_graph_modules(
+            config.model,
+            ["attn", "mamba", "moe_router", "moe_preprocess"],
+        )
+
+        assert config.model.mtp_num_layers > 0
+        assert config.model.moe_latent_size is not None
 
     def test_pretrain_config_optimizer_settings(self):
         """Test optimizer settings for pretrain config."""
