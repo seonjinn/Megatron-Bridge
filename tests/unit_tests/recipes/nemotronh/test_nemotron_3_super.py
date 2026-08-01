@@ -35,7 +35,7 @@ from megatron.bridge.recipes.nemotronh.nemotron_3_super import (
     nemotron_3_super_sft_config,
 )
 from megatron.bridge.training.config import ConfigContainer
-from megatron.bridge.utils.cuda_graph import set_cuda_graph_modules
+from megatron.bridge.utils.cuda_graph import cuda_graph_module_names
 
 
 @pytest.mark.unit
@@ -102,17 +102,24 @@ class TestNemotron3SuperPretrain:
         assert config.model.calculate_per_token_loss is True
         assert config.model.mtp_loss_scaling_factor == 0.3
 
-    def test_super_scope_override_keeps_mtp_and_latent_moe(self) -> None:
-        """A TE hybrid scope override preserves Super MTP and latent MoE."""
+    def test_super_default_te_graph_keeps_mtp_and_latent_moe(self) -> None:
+        """The Super default owns the current TE graph, MTP, and LatentMoE contract."""
         config = nemotron_3_super_pretrain_config()
 
-        set_cuda_graph_modules(
-            config.model,
-            ["attn", "mamba", "moe_router", "moe_preprocess"],
-        )
+        assert config.model.cuda_graph_scope is None
+        config.model.finalize()
 
-        assert config.model.mtp_num_layers > 0
-        assert config.model.moe_latent_size is not None
+        assert config.model.cuda_graph_impl == "transformer_engine"
+        assert cuda_graph_module_names(config.model) == ["attn", "mamba", "moe_router", "moe_preprocess"]
+        assert config.model.cuda_graph_scope is None
+        assert config.model.cuda_graph_warmup_steps == 3
+        assert config.model.use_te_rng_tracker is True
+        assert config.model.moe_token_dispatcher_type == "alltoall"
+        assert config.model.moe_flex_dispatcher_backend == "hybridep"
+        assert config.model.mtp_num_layers == 2
+        assert config.model.mtp_hybrid_override_pattern == "*E"
+        assert config.model.mtp_use_repeated_layer is True
+        assert config.model.moe_latent_size == 1024
 
     def test_pretrain_config_optimizer_settings(self):
         """Test optimizer settings for pretrain config."""

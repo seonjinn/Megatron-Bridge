@@ -22,6 +22,7 @@ from megatron.bridge.recipes.common import _peft_common, _pretrain_common, _sft_
 from megatron.bridge.recipes.utils.dataset_utils import default_peft_config
 from megatron.bridge.recipes.utils.environment_utils import COMMON_RECIPE_ENV_VARS
 from megatron.bridge.training.config import ConfigContainer
+from megatron.bridge.utils.cuda_graph import set_cuda_graph_modules
 
 
 NEMOTRON_3_SUPER_HF_MODEL_ID = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
@@ -82,7 +83,7 @@ def nemotron_3_super_pretrain_8gpu_h100_bf16_config() -> ConfigContainer:
 
     # CUDA Graph (TE impl + partial scopes: ~40% throughput gain over disabled)
     cfg.model.cuda_graph_impl = "transformer_engine"
-    cfg.model.cuda_graph_scope = ["attn", "mamba", "moe_router", "moe_preprocess"]
+    set_cuda_graph_modules(cfg.model, ["attn", "mamba", "moe_router", "moe_preprocess"])
     cfg.model.cuda_graph_warmup_steps = 3
 
     # Kernel Selections
@@ -188,7 +189,7 @@ def nemotron_3_super_sft_8gpu_h100_bf16_config() -> ConfigContainer:
     # CUDA Graph disabled — packed-sequence SFT passes explicit attention masks that
     # are incompatible with CUDA graph capture/replay in Mamba layers.
     cfg.model.cuda_graph_impl = "none"
-    cfg.model.cuda_graph_scope = []
+    set_cuda_graph_modules(cfg.model, [])
 
     # MTP Settings (HF config has num_nextn_predict_layers=1 for the shared block;
     # mtp_num_layers=2 controls forward-pass repetitions with mtp_use_repeated_layer)
@@ -293,7 +294,7 @@ def nemotron_3_super_peft_1gpu_h100_bf16_config(
     # CUDA Graph disabled — packed-sequence SFT passes explicit attention masks that
     # are incompatible with CUDA graph capture/replay in Mamba layers.
     cfg.model.cuda_graph_impl = "none"
-    cfg.model.cuda_graph_scope = []
+    set_cuda_graph_modules(cfg.model, [])
 
     # MTP Settings (HF config has num_nextn_predict_layers=1 for the shared block;
     # mtp_num_layers=2 controls forward-pass repetitions with mtp_use_repeated_layer)

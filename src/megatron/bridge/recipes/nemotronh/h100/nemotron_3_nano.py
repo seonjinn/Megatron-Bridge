@@ -314,7 +314,7 @@ def nemotron_3_nano_sft_8gpu_h100_bf16_config() -> ConfigContainer:
 
     # CUDA Graph
     cfg.model.cuda_graph_impl = "none"
-    cfg.model.cuda_graph_scope = "full"
+    set_cuda_graph_modules(cfg.model, [])
     cfg.model.cuda_graph_warmup_steps = 3
 
     # Kernel selections
@@ -522,7 +522,7 @@ def _nemotron_3_nano_peft_8gpu_h100_bf16_config(
 
     # CUDA Graph
     cfg.model.cuda_graph_impl = "none"
-    cfg.model.cuda_graph_scope = "full"
+    set_cuda_graph_modules(cfg.model, [])
     cfg.model.cuda_graph_warmup_steps = 3
 
     # Kernel selections

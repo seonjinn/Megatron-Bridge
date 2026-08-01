@@ -20,6 +20,7 @@ from megatron.bridge.recipes.common import _peft_common, _pretrain_common, _sft_
 from megatron.bridge.recipes.utils.dataset_utils import default_openmathinstruct2_config, default_peft_config
 from megatron.bridge.recipes.utils.environment_utils import COMMON_RECIPE_ENV_VARS
 from megatron.bridge.training.config import ConfigContainer
+from megatron.bridge.utils.cuda_graph import set_cuda_graph_modules
 
 
 NEMOTRON_3_ULTRA_HF_MODEL_ID = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16"
@@ -57,7 +58,7 @@ def nemotron_3_ultra_pretrain_24gpu_h100_bf16_config() -> ConfigContainer:
     cfg.model.moe_shared_expert_overlap = False
     cfg.model.moe_flex_dispatcher_backend = "hybridep"
     cfg.model.cuda_graph_impl = "none"
-    cfg.model.cuda_graph_scope = []
+    set_cuda_graph_modules(cfg.model, [])
     cfg.model.mtp_num_layers = 2
     cfg.model.keep_mtp_spec_in_bf16 = True
     cfg.model.mtp_loss_scaling_factor = 0.3
@@ -144,7 +145,7 @@ def nemotron_3_ultra_sft_192gpu_h100_bf16_openmathinstruct2_packed_config() -> C
     cfg.model.moe_shared_expert_overlap = False
     cfg.model.moe_flex_dispatcher_backend = "hybridep"
     cfg.model.cuda_graph_impl = "none"
-    cfg.model.cuda_graph_scope = []
+    set_cuda_graph_modules(cfg.model, [])
     cfg.model.mtp_num_layers = 2
     cfg.model.keep_mtp_spec_in_bf16 = True
     cfg.model.mtp_loss_scaling_factor = 0.3
@@ -243,7 +244,7 @@ def nemotron_3_ultra_peft_32gpu_h100_bf16_openmathinstruct2_packed_config(
     cfg.model.moe_shared_expert_overlap = False
     cfg.model.moe_flex_dispatcher_backend = "hybridep"
     cfg.model.cuda_graph_impl = "none"
-    cfg.model.cuda_graph_scope = []
+    set_cuda_graph_modules(cfg.model, [])
     cfg.model.mtp_num_layers = 2
     cfg.model.keep_mtp_spec_in_bf16 = True
     cfg.model.mtp_loss_scaling_factor = 0.3

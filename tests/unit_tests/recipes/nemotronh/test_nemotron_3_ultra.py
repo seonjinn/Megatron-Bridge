@@ -22,6 +22,7 @@ from megatron.bridge.recipes.nemotronh.nemotron_3_ultra import (
     nemotron_3_ultra_pretrain_config,
     nemotron_3_ultra_sft_openmathinstruct2_packed_config,
 )
+from megatron.bridge.utils.cuda_graph import cuda_graph_module_names
 from tests.unit_tests.recipes.recipe_test_utils import patch_recipe_module_global
 
 
@@ -30,6 +31,8 @@ class _FakeUltraProvider:
 
     def __init__(self) -> None:
         self.vocab_size = 256
+        self.cuda_graph_modules = "full"
+        self.cuda_graph_scope = None
 
     def finalize(self) -> None:
         return None
@@ -88,7 +91,11 @@ def test_ultra_default_remains_graph_disabled() -> None:
     """Ultra remains graph-disabled unless an experiment overrides it."""
     cfg = nemotron_3_ultra_pretrain_config()
 
+    cfg.model.finalize()
+
     assert cfg.model.cuda_graph_impl == "none"
+    assert cuda_graph_module_names(cfg.model) == []
+    assert cfg.model.cuda_graph_scope is None
 
 
 @pytest.mark.unit

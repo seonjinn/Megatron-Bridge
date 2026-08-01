@@ -32,6 +32,7 @@ import pytest
 import torch
 
 from megatron.bridge.models.hybrid.hybrid_provider import HybridModelProvider
+from megatron.bridge.recipes.nemotronh.gb200 import nemotron_3_nano_pretrain_8gpu_gb200_bf16_config
 from megatron.bridge.recipes.nemotronh.h100 import nemotron_3_nano as recipe_module
 from megatron.bridge.recipes.nemotronh.nemotron_3_nano import (
     nemotron_3_5_nano_peft_config,
@@ -132,8 +133,8 @@ class TestNemotron3NanoPretrain:
         assert config.model.moe_shared_expert_overlap is False
         assert config.model.moe_flex_dispatcher_backend == "hybridep"
 
-    def test_nano_accepts_te_hybrid_scope_override(self) -> None:
-        """A TE hybrid scope override preserves the Nano MoE topology."""
+    def test_nano_rejects_moe_router_graph_with_whole_moe_recompute(self) -> None:
+        """The H100 default must reject a router graph covered by MoE recompute."""
         config = nemotron_3_nano_pretrain_config()
 
         set_cuda_graph_modules(
@@ -141,8 +142,53 @@ class TestNemotron3NanoPretrain:
             ["attn", "mamba", "moe_router", "moe_preprocess"],
         )
 
+        with pytest.raises(AssertionError, match="moe recompute is not supported with moe_router"):
+            config.model.finalize()
+
+    def test_nano_accepts_compatible_te_hybrid_scope_override(self) -> None:
+        """A compatible TE hybrid override preserves the dropless HybridEP contract."""
+        config = nemotron_3_nano_pretrain_config()
+
+        set_cuda_graph_modules(
+            config.model,
+            ["attn", "mamba", "moe_router", "moe_preprocess"],
+        )
+        config.model.recompute_modules = ["layernorm"]
+        config.model.finalize()
+
+        assert config.model.cuda_graph_impl == "transformer_engine"
+        assert cuda_graph_module_names(config.model) == ["attn", "mamba", "moe_router", "moe_preprocess"]
+        assert config.model.cuda_graph_scope is None
+        assert config.model.cuda_graph_warmup_steps == 3
+        assert config.model.use_te_rng_tracker is True
+        assert config.rng.te_rng_tracker is True
         assert config.model.moe_token_dispatcher_type == "flex"
         assert config.model.moe_flex_dispatcher_backend == "hybridep"
+        assert config.model.moe_pad_expert_input_to_capacity is False
+        assert config.model.moe_expert_capacity_factor is None
+        assert config.model.moe_hybridep_pad_uneven_dispatch_inputs is False
+        assert config.model.recompute_granularity == "selective"
+        assert config.model.recompute_modules == ["layernorm"]
+
+    def test_gb200_nano_default_finalizes_with_four_te_graph_modules(self) -> None:
+        """The production GB200 recipe owns the validated four-scope contract."""
+        config = nemotron_3_nano_pretrain_8gpu_gb200_bf16_config()
+
+        config.model.finalize()
+
+        assert config.model.cuda_graph_impl == "transformer_engine"
+        assert cuda_graph_module_names(config.model) == ["attn", "mamba", "moe_router", "moe_preprocess"]
+        assert config.model.cuda_graph_scope is None
+        assert config.model.cuda_graph_warmup_steps == 3
+        assert config.model.use_te_rng_tracker is True
+        assert config.rng.te_rng_tracker is True
+        assert config.model.moe_token_dispatcher_type == "flex"
+        assert config.model.moe_flex_dispatcher_backend == "hybridep"
+        assert config.model.recompute_granularity is None
+        assert config.model.recompute_modules == ["core_attn"]
+        assert config.model.moe_pad_expert_input_to_capacity is False
+        assert config.model.moe_expert_capacity_factor is None
+        assert config.model.moe_hybridep_pad_uneven_dispatch_inputs is False
 
     def test_pretrain_config_moe_kernel_settings(self):
         """Test MoE kernel settings for pretrain config."""
