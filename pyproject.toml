@@ -157,6 +157,15 @@ name = "flash-mla"
 version = "1.0.0+b7643bd"
 requires-dist = []
 
+# v1.1.0 uses legacy setup.py and imports setuptools, wheel, packaging, and
+# torch while preparing metadata. Supplying its declared runtime metadata lets
+# `uv lock` resolve the pinned source without mutating the container or building
+# the CUDA extension.
+[[tool.uv.dependency-metadata]]
+name = "fast-hadamard-transform"
+version = "1.1.0"
+requires-dist = ["torch", "packaging", "ninja"]
+
 # transformer-engine is a git dep marked no-build-isolation, so uv builds it FROM SOURCE purely to read
 # its metadata at lock time — a cold nvcc/ninja compile that runs tens of minutes and stalled the nightly
 # mcore bump (CI-Events-Workflows#746). Provide its metadata so the resolver skips that build, exactly as
