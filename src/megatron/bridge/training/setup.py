@@ -21,7 +21,6 @@ from typing import Any, Callable, NamedTuple, Optional
 import torch
 from megatron.core.config import set_experimental_flag
 from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig, finalize_model_grads
-from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel as megatron_FSDP
 from megatron.core.jit import disable_jit_fuser
 from megatron.core.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
@@ -62,6 +61,7 @@ from megatron.bridge.training.utils.checkpoint_utils import checkpoint_exists, i
 from megatron.bridge.training.utils.log_utils import append_to_progress_log, barrier_and_log, setup_logging
 from megatron.bridge.training.utils.train_utils import start_memory_history_recording
 from megatron.bridge.utils.common_utils import get_rank_safe, print_rank_0
+from megatron.bridge.utils.mcore_compat import MEGATRON_FSDP_TYPES
 
 
 class SetupOutput(NamedTuple):
@@ -537,7 +537,7 @@ def _update_model_config_funcs(
     pg_collection: Optional[ProcessGroupCollection] = None,
 ) -> None:
     """Update model config sync funcs based on initialized model."""
-    if isinstance(model[0], (DistributedDataParallel, megatron_FSDP)) and ddp_config.overlap_grad_reduce:
+    if isinstance(model[0], (DistributedDataParallel, *MEGATRON_FSDP_TYPES)) and ddp_config.overlap_grad_reduce:
         assert model_config.no_sync_func is None, (
             "When overlap_grad_reduce is True, config.no_sync_func must be None; "
             "a custom no_sync_func is not supported when overlapping grad-reduce"

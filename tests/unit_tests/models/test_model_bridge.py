@@ -22,6 +22,7 @@ import torch
 from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
 from megatron.bridge.models.conversion.model_bridge import HFWeightTuple, MegatronModelBridge, WeightConversionTask
 from megatron.bridge.models.conversion.param_mapping import AutoMapping
+from megatron.bridge.utils.mcore_compat import MEGATRON_FSDP_TYPES
 
 
 class DummyBridge(MegatronModelBridge):
@@ -30,6 +31,32 @@ class DummyBridge(MegatronModelBridge):
 
     def mapping_registry(self):  # pragma: no cover - not used in tests
         return MegatronMappingRegistry()
+
+
+def test_load_weights_hf_to_megatron_accepts_non_fsdp_model_with_fsdp_factory(monkeypatch):
+    bridge = DummyBridge()
+    model = torch.nn.Linear(1, 1)
+    hf_pretrained = SimpleNamespace(state={}, model_name_or_path="dummy")
+    monkeypatch.setattr(bridge, "build_conversion_tasks", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(bridge, "_broadcast_shared_embeddings", lambda *_args, **_kwargs: None)
+
+    loaded_models = bridge.load_weights_hf_to_megatron(hf_pretrained, model)
+
+    assert loaded_models == [model]
+
+
+def test_load_weights_hf_to_megatron_preserves_megatron_fsdp_wrapper(monkeypatch):
+    bridge = DummyBridge()
+    model = Mock(spec=MEGATRON_FSDP_TYPES[0])
+    model.module = Mock()
+    hf_pretrained = SimpleNamespace(state={}, model_name_or_path="dummy")
+    monkeypatch.setattr(bridge, "build_conversion_tasks", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(bridge, "_broadcast_shared_embeddings", lambda *_args, **_kwargs: None)
+
+    loaded_models = bridge.load_weights_hf_to_megatron(hf_pretrained, model)
+
+    assert loaded_models == [model]
+    model.module.install_optimized_model_weights.assert_called_once_with()
 
 
 def test_hf_weight_tuple_iter_finalized_preserves_two_field_abi():

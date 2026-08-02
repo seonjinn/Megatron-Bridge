@@ -13,8 +13,15 @@
 # limitations under the License.
 
 import pytest
+import torch
 
-from megatron.bridge.models.conversion.utils import mcore_to_hf_window_size
+from megatron.bridge.models.conversion.utils import mcore_to_hf_window_size, unwrap_model
+
+
+def test_unwrap_model_accepts_plain_model_with_fsdp_factory():
+    model = torch.nn.Linear(1, 1)
+
+    assert unwrap_model(model) is model
 
 
 @pytest.mark.parametrize(

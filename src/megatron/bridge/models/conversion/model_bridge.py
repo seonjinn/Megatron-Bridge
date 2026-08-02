@@ -39,7 +39,6 @@ from typing import (
 
 import torch
 from megatron.core import parallel_state
-from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel
 from megatron.core.pipeline_parallel.utils import is_pp_first_stage, is_pp_last_stage
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
@@ -72,6 +71,7 @@ from megatron.bridge.models.decorators.dispatch import dispatch
 from megatron.bridge.models.model_provider import ModelProviderMixin
 from megatron.bridge.utils.activation_map import ACTIVATION_FUNC_MAP
 from megatron.bridge.utils.common_utils import print_rank_0
+from megatron.bridge.utils.mcore_compat import MEGATRON_FSDP_TYPES
 
 
 logger = logging.getLogger(__name__)
@@ -1055,7 +1055,7 @@ class MegatronModelBridge(
         if not isinstance(megatron_model, list):
             megatron_model = [megatron_model]
 
-        use_megatron_fsdp = isinstance(megatron_model[0], FullyShardedDataParallel)
+        use_megatron_fsdp = isinstance(megatron_model[0], MEGATRON_FSDP_TYPES)
         if use_megatron_fsdp:
             original_megatron_model = megatron_model
         unwrapped_model_list = unwrap_model(megatron_model)

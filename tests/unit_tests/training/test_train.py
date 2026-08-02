@@ -19,7 +19,6 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel as megatron_FSDP
 from megatron.core.optimizer.distrib_optimizer import DistributedOptimizer
 
 from megatron.bridge.training.train import (
@@ -37,6 +36,7 @@ from megatron.bridge.training.train import (
     should_disable_forward_pre_hook,
 )
 from megatron.bridge.training.utils.train_utils import maybe_inject_state
+from megatron.bridge.utils.mcore_compat import MEGATRON_FSDP_TYPES
 
 
 pytestmark = pytest.mark.unit
@@ -53,7 +53,7 @@ class TestFSDPRegistration:
         config.ddp.fsdp_manual_registration = True
 
         # Mock model chunk
-        model_chunk = Mock(spec=megatron_FSDP)
+        model_chunk = Mock(spec=MEGATRON_FSDP_TYPES[0])
         # Mock ddp_config on the chunk
         model_chunk.ddp_config = Mock()
         model_chunk.ddp_config.fsdp_manual_registration = True
