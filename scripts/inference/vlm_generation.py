@@ -1,4 +1,4 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2025-2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,16 +15,16 @@
 """
 Example:
   # Vision-Language generation with image from URL:
-  uv run python examples/conversion/hf_to_megatron_generate_vlm.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --image_path="https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg" --prompt="Describe this image."
+  uv run python scripts/inference/vlm_generation.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --image_path="https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg" --prompt="Describe this image."
 
   # Vision-Language generation with local image:
-  uv run python examples/conversion/hf_to_megatron_generate_vlm.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --image_path="/path/to/image.jpg" --prompt="What do you see in this image?"
+  uv run python scripts/inference/vlm_generation.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --image_path="/path/to/image.jpg" --prompt="What do you see in this image?"
 
   # Text-only generation (no image):
-  uv run python examples/conversion/hf_to_megatron_generate_vlm.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --prompt="Hello, how are you?"
+  uv run python scripts/inference/vlm_generation.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --prompt="Hello, how are you?"
 
   # Load from Megatron checkpoint:
-  uv run python examples/conversion/hf_to_megatron_generate_vlm.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --megatron_model_path="/path/to/megatron/checkpoint" --image_path="/path/to/image.jpg" --prompt="Describe this image."
+  uv run python scripts/inference/vlm_generation.py --hf_model_path="Qwen/Qwen2.5-VL-3B-Instruct" --megatron_model_path="/path/to/megatron/checkpoint" --image_path="/path/to/image.jpg" --prompt="Describe this image."
 """
 
 import argparse
@@ -33,8 +33,8 @@ import torch
 import torch.distributed as dist
 from megatron.core import parallel_state
 from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
-from transformers import AutoConfig, AutoProcessor, AutoTokenizer, GenerationConfig
-from vlm_generate_utils import (
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer
+from vlm_generation_utils import (
     pad_input_ids_to_tp_multiple,
     patch_kimi_vision_processor,
     process_image_inputs,
@@ -297,19 +297,7 @@ def main(args) -> None:
     # Greedy generation loop
     # ------------------------------------------------------------------
     generated_ids = input_ids_raw.clone()
-    try:
-        generation_config = GenerationConfig.from_pretrained(
-            args.hf_model_path,
-            **_hf_revision_kwargs(args.hf_revision),
-        )
-    except OSError:
-        generation_config = GenerationConfig.from_model_config(config)
-    stop_token_ids = generation_config.eos_token_id
-    if stop_token_ids is None:
-        stop_token_ids = [tokenizer.eos_token_id]
-    elif isinstance(stop_token_ids, int):
-        stop_token_ids = [stop_token_ids]
-    stop_tokens = set(stop_token_ids)
+    stop_tokens = [tokenizer.eos_token_id]
 
     for step in range(args.max_new_tokens):
         with torch.no_grad():
