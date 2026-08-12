@@ -54,6 +54,7 @@ from megatron.bridge.training.checkpointing import (
     maybe_load_dataloader_state,
 )
 from megatron.bridge.training.config import ConfigContainer
+from megatron.bridge.training.fsdp_compat import MEGATRON_FSDP_TYPES
 from megatron.bridge.training.initialize import initialize_megatron, set_jit_fusion_options
 from megatron.bridge.training.optim import (
     memory_efficient_fp32_optimizer_state_loading,
