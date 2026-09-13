@@ -470,7 +470,10 @@ class MegatronQuantizationBridge:
             vp_stage, local_name, local_module, local_weight = local
             expanded_names = grouped_expansions.get(global_name)
             if expanded_names is not None:
-                members = list(local_weight.unbind(0))
+                # TE dispatches unbind through a stacked copy. Keep member
+                # storage views so cached export tasks observe optimizer updates.
+                split_members = getattr(local_weight, "split_into_quantized_tensors", None)
+                members = list(split_members() if callable(split_members) else local_weight.unbind(0))
                 if len(members) != len(expanded_names):
                     raise ValueError(
                         f"Grouped expert parameter {global_name!r} has {len(members)} local members, "
